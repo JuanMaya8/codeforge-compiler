@@ -1,0 +1,6 @@
+// Cada línea contiene un error léxico
+let price = 12abc;
+let rate = 3.;
+let total = price @ 2;
+let ok = a & b;
+print("sin cerrar);
