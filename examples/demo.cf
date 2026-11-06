@@ -1,0 +1,33 @@
+// Programa de ejemplo de CodeForge
+let age: int = 21;
+const PI: float = 3.14;
+
+function sum(a: int, b: int) -> int {
+    return a + b;
+}
+
+/* Recursividad: factorial */
+function factorial(n: int) -> int {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+let numbers: int[] = [1, 2, 3];
+let i: int = 0;
+
+while (i < 3 && age > 0) {
+    numbers[i] = numbers[i] * 2;
+    i = i + 1;
+}
+
+if (age >= 18) {
+    print(sum(age, 5));
+} else if (age == 17) {
+    print("Almost");
+} else {
+    print("Minor");
+}
+
+print(factorial(5));
