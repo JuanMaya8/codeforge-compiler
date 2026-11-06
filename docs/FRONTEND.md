@@ -107,19 +107,21 @@ aunque empiece por `let`.
 
 ### Errores léxicos
 
-El Lexer **no se detiene** en el primer error: lo registra con su línea y
-columna, salta el lexema inválido y sigue. Así se reportan todos los
-errores en una sola pasada.
+El Lexer **no se detiene** en el primer error: lo registra como un
+`CompilerDiagnostic` (fase `lexical`, código estable, mensaje y posición),
+salta el lexema inválido y sigue. Así se reportan todos los errores en una
+sola pasada. El contrato completo de diagnósticos está en el informe de
+integración.
 
-| Entrada        | Error                                                                  |
-| -------------- | ---------------------------------------------------------------------- |
-| `@`            | Carácter '@' no reconocido.                                            |
-| `a & b`        | Carácter '&' inesperado. ¿Quisiste escribir '&&'?                      |
-| `"hola`        | Cadena de texto sin cerrar: falta la comilla doble final.              |
-| `"a\qb"`       | Secuencia de escape '\q' no válida.                                    |
-| `/* ...`       | Comentario de bloque sin cerrar: falta '*/'.                           |
-| `12abc`        | Número mal formado '12abc': un identificador no puede empezar con un dígito. |
-| `3.`           | Número decimal mal formado '3.': se esperaba un dígito después del punto. |
+| Entrada  | Código                 | Mensaje                                                                |
+| -------- | ---------------------- | ---------------------------------------------------------------------- |
+| `@`      | `UNEXPECTED_CHARACTER` | Carácter '@' no reconocido.                                            |
+| `a & b`  | `UNEXPECTED_CHARACTER` | Carácter '&' inesperado. ¿Quisiste escribir '&&'?                      |
+| `"hola`  | `UNTERMINATED_STRING`  | Cadena de texto sin cerrar: falta la comilla doble final.              |
+| `"a\qb"` | `INVALID_ESCAPE`       | Secuencia de escape '\q' no válida.                                    |
+| `/* ...` | `UNTERMINATED_COMMENT` | Comentario de bloque sin cerrar: falta '*/'.                           |
+| `12abc`  | `MALFORMED_NUMBER`     | Número mal formado '12abc': un identificador no puede empezar con un dígito. |
+| `3.`     | `MALFORMED_NUMBER`     | Número decimal mal formado '3.': se esperaba un dígito después del punto. |
 
 ### Ejemplo de entrada y salida
 
@@ -285,8 +287,8 @@ duplicar código.
 
 Cuando `consume()` no encuentra el token esperado:
 
-1. Registra un error con mensaje y posición, por ejemplo:
-   `[syntax] 1:10 Se esperaba ';' al final de la declaración de variable, pero se encontró 'print'.`
+1. Registra un diagnóstico (`CompilerDiagnostic`) con fase, código, mensaje y posición, por ejemplo:
+   `[syntax] EXPECTED_TOKEN 1:10 Se esperaba ';' al final de la declaración de variable, pero se encontró 'print'.`
    Si el token faltante debía ir al final de una línea (típico con `;`), el
    error apunta al final de esa línea y no al inicio de la siguiente.
 2. Lanza una señal interna (`ParseError`) que aborta la sentencia actual.
@@ -402,4 +404,6 @@ Archivos de prueba:
 | `src/compiler/lexer/Lexer.test.ts` | Tokens, posiciones, comentarios, escapes y errores léxicos. |
 | `src/compiler/parser/Parser.test.ts` | Declaraciones, sentencias, precedencia, asociatividad, errores sintácticos y recuperación. |
 | `src/compiler/ast/ast.test.ts` | `printAst` y `typeToString` sobre árboles construidos a mano. |
+| `src/compiler/ast/contract.test.ts` | Contrato del AST canónico: todos los `kind`, posiciones, arreglos y `null` documentados. |
+| `src/compiler/errors.test.ts` | Contrato `CompilerDiagnostic`: campos opcionales, formato y códigos. |
 | `src/compiler/frontend.test.ts` | Integración Lexer → Parser → AST con programas completos. |
