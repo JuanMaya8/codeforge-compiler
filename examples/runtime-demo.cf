@@ -1,0 +1,15 @@
+// Demo compatible con el AST semántico y el IR v1.0 actuales.
+function factorial(n: int) -> int {
+  if (n <= 1) {
+    return 1;
+  }
+  return n * factorial(n - 1);
+}
+
+let i: int = 0;
+while (i < 3) {
+  print(i);
+  i = i + 1;
+}
+
+print(factorial(5));
