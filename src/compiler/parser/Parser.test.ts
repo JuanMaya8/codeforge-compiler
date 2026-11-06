@@ -256,6 +256,13 @@ describe('Parser: syntax errors', () => {
     expect(program.body).toMatchObject([{ kind: 'VariableDeclaration', name: 'b' }]);
   });
 
+  it('skips the body of a broken header instead of reporting cascading errors', () => {
+    const source = 'function add(a, b: int) -> int {\n  return a + b;\n}\nif (x > 3 { print(x); }\nprint(1);';
+    const { program, errors } = parseTokens(tokenize(source).tokens);
+    expect(errors.map((e) => e.line)).toEqual([1, 4]);
+    expect(program.body).toMatchObject([{ kind: 'PrintStatement' }]);
+  });
+
   it('does not loop forever on stray tokens', () => {
     expect(syntaxErrors('} } ) ]').length).toBeGreaterThan(0);
   });

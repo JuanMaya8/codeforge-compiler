@@ -570,14 +570,27 @@ export class Parser {
   /**
    * Panic mode: discard tokens until a point where a new statement
    * probably begins (after ';', before a keyword, or before '}').
+   * A whole `{ ... }` block found while skipping is discarded too, so the
+   * body of a broken `function`/`if` header does not produce extra errors.
    */
   private synchronize(): void {
     while (!this.isAtEnd()) {
       if (this.previous()?.type === TokenType.SEMICOLON) return;
       const next = this.peek().type;
       if (STATEMENT_START.has(next) || next === TokenType.RIGHT_BRACE) return;
-      this.advance();
+      if (next === TokenType.LEFT_BRACE) this.skipBlock();
+      else this.advance();
     }
+  }
+
+  /** Skips from '{' to its matching '}' (or to the end of the input). */
+  private skipBlock(): void {
+    let depth = 0;
+    do {
+      const token = this.advance();
+      if (token.type === TokenType.LEFT_BRACE) depth++;
+      else if (token.type === TokenType.RIGHT_BRACE) depth--;
+    } while (depth > 0 && !this.isAtEnd());
   }
 }
 
