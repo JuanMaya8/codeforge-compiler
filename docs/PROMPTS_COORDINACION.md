@@ -1,112 +1,183 @@
-# Prompts de coordinación del equipo CodeForge
+# Prompts de implementación coordinada — CodeForge
 
-Estos prompts son propuestas de JuanMaya8 para compartir con Jack y Deivid. El
-objetivo es cerrar decisiones técnicas explícitas antes de ampliar contratos o
-fusionar trabajo remoto. No representan aprobación previa de los demás
-integrantes.
+Los siguientes prompts están escritos en voz de JuanMaya8 para asignarlos a
+las IAs de código de Jack y Deivid. Contienen decisiones ya tomadas para que
+cada responsable implemente una parte compatible; no piden votar entre
+alternativas. Ejecútense en orden: contrato común, arreglos y, finalmente, UI.
 
-## 1. Arreglos: AST, tipos, IR y Heap
+## Decisiones técnicas de JuanMaya8
 
-```text
-Soy JuanMaya8, responsable del Runtime de CodeForge. Quiero que acordemos en
-equipo el alcance de arreglos antes de cambiar código.
+1. El AST de Jack (`src/compiler/ast/nodes.ts`) será el AST canónico. Semántica e
+   IR consumirán esos tipos directamente; no mantendremos un segundo AST
+   semántico ni un adaptador de conversión a largo plazo.
+2. Los arreglos que ya reconoce el frontend forman parte del lenguaje inicial.
+   Se soportarán arreglos homogéneos y anidados, con heap de referencias y
+   chequeos de límites. Los cambios incompatibles se publicarán como IR v2.0.
+3. Las fases compartirán un diagnóstico tipado con etapa, código, mensaje,
+   ubicación de fuente y, para Runtime, PC/instrucción. El IR conservará
+   ubicaciones para poder relacionar un fallo de ejecución con la fuente.
+4. La UI llamará a `runSource()` y no reimplementará fases. No se fusionará una
+   rama con errores o checks pendientes ni se eludirán protecciones de GitHub.
 
-Estado observado:
-- El frontend de Jack acepta tipos T[], literales [a, b], indexación a[i] y
-  asignaciones a[i] = valor.
-- El AST semántico de Deivid y el IR v1.0 actual son escalares y no tienen
-  instrucciones para reservar, leer o escribir memoria de arreglos.
-- El Runtime tiene un Heap educativo, pero todavía no está conectado al IR.
-
-Propongo decidir una sola opción para la primera entrega:
-A. Excluir arreglos del alcance inicial, actualizar gramática/ejemplos y emitir
-   un error claro si se intenta ejecutar uno.
-B. Acordar una versión nueva del contrato que soporte arreglos de punta a punta.
-
-Si elegimos B, definamos antes de programar:
-1. Tipos de arreglo y reglas de homogeneidad/dimensiones.
-2. Representación de referencia y layout del bloque en Heap.
-3. Instrucciones IR tipadas para reservar, cargar y guardar elementos, con
-   comportamiento para índices inválidos.
-4. Actualización/versionado de IR_VERSION y casos de pruebas del generador y VM.
-5. Responsables de AST, semántica, IR, Heap y pruebas.
-
-Por favor responde con A o B, el contrato concreto propuesto y cualquier
-objeción. No cambies archivos hasta que Jack, Deivid y Juan confirmen la misma
-decisión. Registraremos el acuerdo en la documentación del proyecto.
-```
-
-## 2. Contrato común de AST y errores
+## 1. Prompt para Jack y Deivid: AST canónico y errores comunes
 
 ```text
-Soy JuanMaya8. Revisé el informe de Jack y los tipos actuales de Jack y Deivid.
-Los AST no coinciden directamente: Jack usa VariableDeclaration,
-BlockStatement, ReturnStatement.argument y AssignmentExpression; Deivid usa
-VarDeclaration, Block, ReturnStatement.value y AssignmentStatement. También
-difieren las ubicaciones (position frente a loc) y los errores (CompilerError,
-SemanticError y RuntimeErrorInfo).
+Soy JuanMaya8 y coordino la integración de CodeForge. Implementen la decisión
+de usar el AST de Jack como contrato canónico; no me pidan escoger entre
+alternativas ni cambien el lenguaje por su cuenta.
 
-Hay un adaptador temporal en src/compiler/integration/ast-adapter.ts. Traduce
-el subconjunto escalar y rechaza explícitamente las estructuras que el AST
-semántico no representa. No quiero mantener dos contratos accidentalmente.
+FUENTE CANÓNICA
+- Usen directamente los tipos de src/compiler/ast/nodes.ts:
+  Program, VariableDeclaration, BlockStatement, ReturnStatement.argument,
+  ExpressionStatement, AssignmentExpression, ArrayExpression, IndexExpression,
+  TypeAnnotation y position {line, column}.
+- Eliminen la duplicación de src/compiler/semantic/ast-contract.ts cuando ya no
+  tenga consumidores. Refactoricen semantic/type-checker.ts e
+  ir/ir-generator.ts para recorrer el AST canónico; no conviertan a otro AST.
+- La anotación null en retorno de FunctionDeclaration representa void; la
+  anotación null de variable con inicializador significa inferencia.
+- Mantengan la gramática y nodos del frontend de Jack, incluidos arreglos y
+  asignaciones expresión. La fase de arreglos implementará su semántica/IR en
+  el siguiente prompt.
 
-Propongo acordar:
-1. Si conservamos el AST de Jack como canónico y Deivid adopta sus tipos, o si
-   mantenemos ambos con un adaptador oficial y dueño definido.
-2. Forma única de ubicación de origen (línea/columna) y cómo se conserva al
-   generar IR.
-3. Forma común de diagnóstico: etapa, código estable, mensaje, ubicación y,
-   para runtime, PC/instrucción.
-4. Qué construcciones quedan soportadas en la primera versión y cuáles deben
-   producir diagnósticos claros.
+ERRORES Y UBICACIONES
+- Definan en src/compiler/errors.ts una forma compartida:
+  CompilerDiagnostic = { phase: 'lexical'|'syntax'|'semantic'|'runtime',
+  code: string, message: string, position?: {line:number; column:number},
+  pc?: number, instruction?: string }.
+- Migren errores semánticos y de Runtime a ese contrato sin perder códigos,
+  ubicación ni PC. Conserven formatError o reemplácenlo por un único formatter.
+- Agreguen ubicación de origen al IR generado (campo source opcional en cada
+  instrucción o source map explícito por cuerpo). Runtime debe adjuntarla al
+  diagnóstico además del PC cuando exista.
+- Actualicen runSource() para devolver diagnostics de forma uniforme y
+  eliminen src/compiler/integration/ast-adapter.ts cuando el pipeline consuma
+  el AST canónico directamente.
 
-Por favor revisa docs/REVISION_CONTRATOS_INTEGRACION.md y responde con una
-propuesta campo por campo, archivos que cambiarían, riesgos de compatibilidad
-y pruebas necesarias. No hagas cambios todavía. Cerramos el acuerdo cuando
-Jack, Deivid y Juan confirmen la misma forma.
+RESTRICCIONES Y ENTREGA
+- No cambien Vite, React, TypeScript ni ESLint; no hagan commit ni push.
+- Trabajen en ramas asignadas y describan qué rama/archivos tocaron.
+- Añadan o adapten pruebas para declaraciones, bloques, asignaciones,
+  funciones, arrays en AST (aunque su ejecución llegue en la fase siguiente),
+  errores léxicos/sintácticos/semánticos y posiciones.
+- Ejecuten npm ci, npm test, npm run lint y npm run build. No digan que pasó
+  algo que no ejecutaron.
+- Entreguen un diff revisable y un resumen de incompatibilidades que hayan
+  retirado. Si un punto bloquea, informen el fallo exacto sin inventar otro
+  contrato.
 ```
 
-## 3. UI React, pruebas integradas y PR #1
+## 2. Prompt para Deivid y Juan: soporte completo de arreglos en IR v2.0 y VM
 
 ```text
-Soy JuanMaya8 y propongo preparar la demostración integrada de CodeForge sin
-mezclar todavía contratos que no estén aprobados.
+Soy JuanMaya8, responsable del Runtime. Implementen arreglos de punta a punta
+con el AST canónico de Jack y las decisiones concretas siguientes. No dejen
+arreglos aceptados por el parser pero sin soporte en backend.
 
-El servicio independiente de React ya expone runSource(source): pasa por el
-frontend, el adaptador, semántica/IR y Runtime para el subconjunto compatible.
-La UI actual sigue siendo la plantilla Vite. El comando
-`npm run compiler:run -- examples/runtime-demo.cf` valida el pipeline y muestra
-IR y salida.
+TIPOS Y SEMÁNTICA
+- Los arreglos son homogéneos y pueden anidarse: int[], float[][], string[],
+  bool[][], etc. La forma recursiva del tipo debe preservar elementType.
+- Índices son int; rechacen otros tipos en análisis semántico.
+- Asignaciones `a[i] = value` exigen que value sea asignable al tipo del
+  elemento. Lecturas `a[i]` producen el tipo de elemento.
+- Literales vacíos solo son válidos si el contexto proporciona tipo de arreglo;
+  sin contexto, reporten error de inferencia claro.
+- `let a: T[];` se inicializa como arreglo vacío; cualquier índice sobre él da
+  error de límites. Constantes de arreglo requieren inicializador y mantienen
+  la inmutabilidad de la referencia (sus elementos sí son mutables).
+- Arreglos se pasan y retornan por referencia; asignar una referencia crea un
+  alias del mismo bloque. No implementen GC/free: los bloques viven hasta que
+  termina la ejecución del programa.
 
-Propongo que Jack lidere la UI y que el equipo acuerde una primera pantalla que
-permita editar/ejecutar fuente y mostrar:
-- tokens y AST cuando el frontend termina correctamente;
-- errores con fase, código y línea/columna;
-- IR generado, salida de print, estado y error de Runtime;
-- PC/instrucción actual y snapshots de Stack/Heap para depuración.
+CONTRATO IR
+- Suban IR_VERSION de '1.0' a '2.0' porque cambia el tipo de los operandos y
+  añade instrucciones. Actualicen docs/README, generador, printer, tests y VM
+  juntos; no acepten silenciosamente IR 1.0 en la VM 2.0.
+- Introduzcan un tipo recursivo IRType: primitivo int|float|string|bool o
+  array con elementType IRType. ConstOperand conserva literales primitivos;
+  referencias de arrays son valores de Runtime, nunca strings a parsear.
+- Añadan opcodes tipados:
+  ARRAY_ALLOC {dest, elementType, length},
+  ARRAY_LOAD {dest, array, index},
+  ARRAY_STORE {array, index, value}.
+- El generador baja `[e1, ..., en]` a ARRAY_ALLOC seguido por ARRAY_STORE en
+  orden. Una dimensión anidada contiene referencias a bloques interiores.
+- Los operandos array deben poder asignarse, pasarse como PARAM, retornarse y
+  guardarse como elementos de otros arreglos. No agreguen un opcode de length:
+  la sintaxis del lenguaje aún no lo expone.
 
-La UI debe explicar o deshabilitar las construcciones que aún no soporta el
-backend (por ejemplo, arreglos); no debe presentar una ejecución parcial como
-correcta. Definamos quién normaliza los errores y qué paneles entran en el MVP.
+HEAP Y ERRORES
+- RuntimeHeap reserva un bloque con longitud y tipo de elemento, devuelve una
+  referencia tipada estable y permite leer/escribir elementos.
+- ARRAY_LOAD/STORE validan referencia, tipo, índice entero y límites
+  (0 <= index < length). Un fallo produce CompilerDiagnostic phase runtime con
+  código estable, mensaje, PC, opcode y ubicación de fuente si está disponible.
+- Heap es no movible, sin GC ni free; documentar aliasing y vida del bloque.
 
-Además, revisemos el PR #1 de Jack: comprobar su diff, estado actual de CI,
-reviews y reglas de develop; ejecutar `npm ci`, `npm test`, `npm run lint` y
-`npm run build` en la integración candidata; publicar findings antes de
-aprobarlo. La integración local probada no equivale a que el PR remoto esté
-fusionado. No se debe omitir checks o protección de rama.
-
-Por favor responde con alcance UI, responsable, criterios de aceptación, estado
-actual del PR/checks y cualquier bloqueo. No hagas merge remoto hasta que las
-revisiones requeridas y los checks estén claros y el equipo dé el visto bueno.
+PRUEBAS Y ENTREGA
+- Cubre literales vacíos/no vacíos, inferencia contextual, arrays anidados,
+  asignación/lectura, aliasing, parámetros/retornos, recursión con arrays,
+  índices negativos/fuera de rango, índice no entero, referencia inválida y
+  error de versión IR.
+- Ejecuta npm ci, npm test, npm run lint y npm run build.
+- No cambies lexer/parser/ast para reinterpretar sintaxis; si detectas un
+  defecto del AST canónico, informa la ubicación y coordina con Jack.
+- No hagas commit ni push. Entrega contrato final, lista de archivos y ejemplo
+  de IR v2.0 con resultado esperado.
 ```
 
-## Estado al redactar estos prompts
+## 3. Prompt para Jack: UI React, pruebas integradas y revisión del PR #1
 
-- Rama local actual: `feature/runtime`.
-- La prueba local más reciente pasó `npm ci`, `npm test` (9 archivos, 140
-  pruebas), `npm run lint`, `npm run build` y el demo `compiler:run`.
-- Los merges locales de `feature/lexer-parser` y `feature/semantic-ir` se
-  incluyeron en `feature/runtime`.
-- El trabajo se publicó en `origin/feature/runtime` con commit `05fce50` a
-  nombre de JuanMaya8. No se ha creado un PR de Runtime ni se ha fusionado el
-  PR #1 de Jack a `develop`.
+```text
+Soy JuanMaya8 y te asigno preparar la interfaz de demostración de CodeForge
+después de que estén integrados el AST canónico, los diagnósticos comunes y el
+IR v2.0 con arreglos. Implementa el flujo completo; no me pidas escoger entre
+opciones de diseño.
+
+UI
+- Reemplaza la pantalla inicial de Vite por una interfaz educativa sencilla:
+  editor de fuente con textarea, selector de ejemplos y botón Compilar y
+  ejecutar. Mantén la UI accesible y adaptable; no agregues dependencias de
+  editor si no son necesarias.
+- Invoca solo el servicio src/compiler/run-source.ts (`runSource(source)`). No
+  vuelvas a implementar lexer, parser, semántica, IR ni VM en React.
+- Presenta pestañas/paneles para tokens, AST, IR, diagnósticos, salida y estado
+  de depuración. Diagnósticos muestran etapa, código, mensaje, línea/columna y
+  PC/opcode cuando existan. Stack y Heap deben leerse del ExecutionResult; no
+  inventes datos.
+- Limpia resultados obsoletos al iniciar una ejecución y muestra claramente
+  fallos de compilación frente a fallos de Runtime. Incluye un ejemplo con
+  arreglos y otro con función/recursión.
+- Evita mostrar IR o salida de una compilación fallida como si fueran válidos.
+
+PR Y VALIDACIÓN
+- Revisa el PR #1 de Jack: comprueba diff, base/target, checks, revisiones y
+  protección actual de develop. Compara los contratos con
+  docs/REVISION_CONTRATOS_INTEGRACION.md y reporta cualquier discrepancia antes
+  de aprobar/mergear.
+- No omitas checks, no fuerces merge y no publiques a develop directamente.
+  El propietario del repo decidirá el merge tras ver findings y resultados.
+- Añade pruebas razonables para el servicio/UI según el test environment
+  existente. Ejecuta npm ci, npm test, npm run lint y npm run build.
+- Entrega un resumen del flujo, archivos modificados, pasos manuales de prueba,
+  estado real del PR #1 y límites que sigan pendientes. No afirmes que abriste,
+  revisaste o fusionaste un PR si no lo hiciste.
+```
+
+## Orden y aceptación
+
+1. Jack y Deivid implementan y revisan el contrato AST/errores común.
+2. Deivid y Juan implementan IR v2.0, Heap y VM para arreglos sobre ese
+   contrato.
+3. Jack integra la UI contra `runSource()` y revisa el PR #1.
+4. Juan valida el diff integrado y las pruebas. El merge remoto de cada PR se
+   hace solo cuando checks requeridos pasen y el propietario dé su aprobación.
+
+## Estado base de esta asignación
+
+- Rama publicada de Runtime: `origin/feature/runtime`; último commit base
+  `b90aaba` (el prompt revisado aún debe publicarse).
+- Build, ESLint y 140 tests pasaron en la versión base; la fase arrays/IR v2.0
+  todavía no está implementada.
+- El frontend actual de React era la plantilla Vite; esta asignación ahora
+  autoriza reemplazarla en la rama de UI.

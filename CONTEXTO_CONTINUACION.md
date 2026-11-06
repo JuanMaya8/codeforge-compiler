@@ -14,7 +14,8 @@ el subconjunto que los contratos AST actuales pueden representar.
 
 ## Ramas y GitHub
 
-- Rama activa local: `feature/runtime`, HEAD `05fce50`.
+- Rama activa local: `feature/runtime`, HEAD `b90aaba` antes de publicar esta
+  revisión de los prompts.
 - `feature/runtime` se publicó en `origin/feature/runtime`; commit `05fce50`
   (`feat(runtime): implement IR execution and integration tooling`), autor Git
   `JuanMaya8 <juanmaya@campusucc.edu.co>`.
