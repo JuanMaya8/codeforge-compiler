@@ -102,44 +102,63 @@ describe('Lexer: errors', () => {
   it('reports unknown characters with their position and keeps scanning', () => {
     const { tokens, errors } = tokenize('let x = 5 @ 3;\nlet y = #;');
     expect(errors).toEqual([
-      { phase: 'lexical', message: "Carácter '@' no reconocido.", line: 1, column: 11 },
-      { phase: 'lexical', message: "Carácter '#' no reconocido.", line: 2, column: 9 },
+      {
+        phase: 'lexical',
+        code: 'UNEXPECTED_CHARACTER',
+        message: "Carácter '@' no reconocido.",
+        position: { line: 1, column: 11 },
+      },
+      {
+        phase: 'lexical',
+        code: 'UNEXPECTED_CHARACTER',
+        message: "Carácter '#' no reconocido.",
+        position: { line: 2, column: 9 },
+      },
     ]);
     expect(tokens.at(-1)?.type).toBe('EOF');
   });
 
   it('reports a single & or | and suggests the logical operator', () => {
     const errors = errorsOf('a & b | c');
-    expect(errors.map((e) => e.message)).toEqual([
-      "Carácter '&' inesperado. ¿Quisiste escribir '&&'?",
-      "Carácter '|' inesperado. ¿Quisiste escribir '||'?",
+    expect(errors.map((e) => [e.code, e.message])).toEqual([
+      ['UNEXPECTED_CHARACTER', "Carácter '&' inesperado. ¿Quisiste escribir '&&'?"],
+      ['UNEXPECTED_CHARACTER', "Carácter '|' inesperado. ¿Quisiste escribir '||'?"],
     ]);
   });
 
   it('reports an unterminated string', () => {
     const errors = errorsOf('print("hello);\nlet x = 1;');
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatchObject({ line: 1, column: 7 });
+    expect(errors[0]).toMatchObject({ code: 'UNTERMINATED_STRING', position: { line: 1, column: 7 } });
     expect(errors[0].message).toContain('Cadena de texto sin cerrar');
   });
 
   it('reports an invalid escape sequence at the backslash', () => {
     const errors = errorsOf('let s = "a\\qb"; let k = 2;');
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatchObject({ line: 1, column: 11 });
+    expect(errors[0]).toMatchObject({ code: 'INVALID_ESCAPE', position: { line: 1, column: 11 } });
     expect(errors[0].message).toContain("'\\q'");
   });
 
   it('reports an unterminated block comment', () => {
     const errors = errorsOf('x /* never closed');
     expect(errors).toEqual([
-      { phase: 'lexical', message: "Comentario de bloque sin cerrar: falta '*/'.", line: 1, column: 3 },
+      {
+        phase: 'lexical',
+        code: 'UNTERMINATED_COMMENT',
+        message: "Comentario de bloque sin cerrar: falta '*/'.",
+        position: { line: 1, column: 3 },
+      },
     ]);
   });
 
   it('reports malformed numbers', () => {
-    expect(errorsOf('3.')[0].message).toContain("Número decimal mal formado '3.'");
-    expect(errorsOf('12abc')[0].message).toContain("Número mal formado '12abc'");
+    const [decimal] = errorsOf('3.');
+    const [glued] = errorsOf('12abc');
+    expect(decimal.code).toBe('MALFORMED_NUMBER');
+    expect(decimal.message).toContain("Número decimal mal formado '3.'");
+    expect(glued.code).toBe('MALFORMED_NUMBER');
+    expect(glued.message).toContain("Número mal formado '12abc'");
   });
 
   it('collects several errors in one pass', () => {

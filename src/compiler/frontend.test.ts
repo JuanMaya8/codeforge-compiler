@@ -84,7 +84,7 @@ describe('Frontend integration (Lexer → Parser → AST)', () => {
   it('returns syntax errors together with the partial AST', () => {
     const result = parseSource('let x: int = 1;\nprint(x');
     expect(result.success).toBe(false);
-    expect(result.errors).toMatchObject([{ phase: 'syntax', line: 2 }]);
+    expect(result.errors).toMatchObject([{ phase: 'syntax', code: 'EXPECTED_TOKEN', position: { line: 2 } }]);
     expect(result.program?.body).toHaveLength(1);
   });
 

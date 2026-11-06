@@ -11,7 +11,7 @@ import type {
   TypeAnnotation,
   VariableDeclaration,
 } from '../ast/index.ts';
-import { createError, type CompilerError } from '../errors.ts';
+import { createDiagnostic, SyntaxErrorCode, type CompilerDiagnostic } from '../errors.ts';
 import { TokenType, type SourcePosition, type Token } from '../tokens.ts';
 
 export interface ParserResult {
@@ -21,7 +21,7 @@ export interface ParserResult {
    * `errors` is empty.
    */
   program: Program;
-  errors: CompilerError[];
+  errors: CompilerDiagnostic[];
 }
 
 /**
@@ -87,7 +87,7 @@ const PRIMARY_START: ReadonlySet<TokenType> = new Set<TokenType>([
  */
 export class Parser {
   private readonly tokens: Token[];
-  private readonly errors: CompilerError[] = [];
+  private readonly errors: CompilerDiagnostic[] = [];
   private current = 0;
 
   constructor(tokens: Token[]) {
@@ -148,6 +148,7 @@ export class Parser {
     if (this.match(TokenType.FUNCTION)) {
       if (!isTopLevel) {
         this.report(
+          SyntaxErrorCode.NESTED_FUNCTION,
           this.previous(),
           'Las funciones solo pueden declararse en el nivel superior del programa, no dentro de un bloque.',
         );
@@ -169,9 +170,9 @@ export class Parser {
 
     // These checks do not stop parsing: the statement is still well formed.
     if (mutability === 'const' && initializer === null) {
-      this.report(name, `La constante '${name.lexeme}' debe tener un valor inicial.`);
+      this.report(SyntaxErrorCode.CONST_WITHOUT_INITIALIZER, name, `La constante '${name.lexeme}' debe tener un valor inicial.`);
     } else if (typeAnnotation === null && initializer === null) {
-      this.report(name, `La variable '${name.lexeme}' necesita un tipo (': int') o un valor inicial.`);
+      this.report(SyntaxErrorCode.MISSING_TYPE_OR_INITIALIZER, name, `La variable '${name.lexeme}' necesita un tipo (': int') o un valor inicial.`);
     }
 
     return {
@@ -229,7 +230,7 @@ export class Parser {
     const token = this.peek();
     const name = TYPE_KEYWORDS[token.type];
     if (!name) {
-      throw this.error(token, `Se esperaba un tipo (int, float, string o bool), pero se encontró ${describe(token)}.`);
+      throw this.error(SyntaxErrorCode.EXPECTED_TYPE, token, `Se esperaba un tipo (int, float, string o bool), pero se encontró ${describe(token)}.`);
     }
     this.advance();
 
@@ -355,7 +356,7 @@ export class Parser {
       if (target.kind === 'IdentifierExpression' || target.kind === 'IndexExpression') {
         return { kind: 'AssignmentExpression', target, value, position: target.position };
       }
-      this.report(equals, 'Destino de asignación no válido: solo se puede asignar a una variable o a un elemento de un arreglo.');
+      this.report(SyntaxErrorCode.INVALID_ASSIGNMENT_TARGET, equals, 'Destino de asignación no válido: solo se puede asignar a una variable o a un elemento de un arreglo.');
     }
 
     return target;
@@ -438,7 +439,7 @@ export class Parser {
       if (this.match(TokenType.LEFT_PAREN)) {
         const paren = this.previous();
         if (expression.kind !== 'IdentifierExpression') {
-          throw this.error(paren, 'Solo se pueden llamar funciones usando su nombre.');
+          throw this.error(SyntaxErrorCode.INVALID_CALLEE, paren, 'Solo se pueden llamar funciones usando su nombre.');
         }
         const args = this.check(TokenType.RIGHT_PAREN) ? [] : this.expressionList();
         this.consume(TokenType.RIGHT_PAREN, "Se esperaba ')' después de los argumentos");
@@ -461,7 +462,7 @@ export class Parser {
     const token = this.peek();
     const position = positionOf(token);
     if (!PRIMARY_START.has(token.type)) {
-      throw this.error(token, `Se esperaba una expresión, pero se encontró ${describe(token)}.`);
+      throw this.error(SyntaxErrorCode.EXPECTED_EXPRESSION, token, `Se esperaba una expresión, pero se encontró ${describe(token)}.`);
     }
     this.advance();
 
@@ -545,7 +546,7 @@ export class Parser {
         ? { line: previous.line, column: previous.column + previous.lexeme.length }
         : positionOf(found);
 
-    throw this.errorAt(position, `${message}, pero se encontró ${describe(found)}.`);
+    throw this.errorAt(SyntaxErrorCode.EXPECTED_TOKEN, position, `${message}, pero se encontró ${describe(found)}.`);
   }
 
   // ---------------------------------------------------------------------
@@ -553,17 +554,17 @@ export class Parser {
   // ---------------------------------------------------------------------
 
   /** Records an error that does not interrupt parsing. */
-  private report(token: Token, message: string): void {
-    this.errors.push(createError('syntax', message, positionOf(token)));
+  private report(code: SyntaxErrorCode, token: Token, message: string): void {
+    this.errors.push(createDiagnostic({ phase: 'syntax', code, message, position: positionOf(token) }));
   }
 
   /** Records an error and returns the signal to abort the current statement. */
-  private error(token: Token, message: string): ParseError {
-    return this.errorAt(positionOf(token), message);
+  private error(code: SyntaxErrorCode, token: Token, message: string): ParseError {
+    return this.errorAt(code, positionOf(token), message);
   }
 
-  private errorAt(position: SourcePosition, message: string): ParseError {
-    this.errors.push(createError('syntax', message, position));
+  private errorAt(code: SyntaxErrorCode, position: SourcePosition, message: string): ParseError {
+    this.errors.push(createDiagnostic({ phase: 'syntax', code, message, position }));
     return new ParseError(message);
   }
 

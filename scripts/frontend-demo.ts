@@ -7,7 +7,7 @@
  * Requires Node.js 22.18+ (runs TypeScript directly).
  */
 import { readFileSync } from 'node:fs';
-import { formatError, parseSource, printAst } from '../src/compiler/frontend.ts';
+import { formatDiagnostic, parseSource, printAst } from '../src/compiler/frontend.ts';
 
 const file = process.argv[2];
 if (!file) {
@@ -33,6 +33,6 @@ console.log('\n=== RESULTADO ===');
 if (result.success) {
   console.log('Sin errores léxicos ni sintácticos.');
 } else {
-  result.errors.forEach((error) => console.log(formatError(error)));
+  result.errors.forEach((error) => console.log(formatDiagnostic(error)));
   process.exitCode = 1;
 }
