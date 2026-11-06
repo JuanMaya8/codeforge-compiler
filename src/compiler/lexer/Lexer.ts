@@ -28,6 +28,14 @@ const SINGLE_CHAR_TOKENS: Readonly<Record<string, TokenType>> = {
   '%': TokenType.PERCENT,
 };
 
+/** Escape sequences allowed inside strings: `\n`, `\t`, `\"`, `\\`. */
+const ESCAPE_SEQUENCES: Readonly<Record<string, string>> = {
+  n: '\n',
+  t: '\t',
+  '"': '"',
+  '\\': '\\',
+};
+
 /**
  * Lexical analyzer (scanner).
  *
@@ -37,6 +45,9 @@ const SINGLE_CHAR_TOKENS: Readonly<Record<string, TokenType>> = {
  *   - `current`: index of the next character to read.
  *   - `line` / `column`: human position of `current`, used for tokens
  *     and error messages.
+ *
+ * Errors do not stop the scan: the invalid lexeme is reported, skipped,
+ * and scanning continues, so all lexical errors are found in one pass.
  */
 export class Lexer {
   private readonly source: string;
@@ -147,10 +158,25 @@ export class Lexer {
     while (isDigit(this.peek())) this.advance();
 
     let isFloat = false;
-    if (this.peek() === '.' && isDigit(this.peekNext())) {
-      isFloat = true;
+    if (this.peek() === '.') {
       this.advance(); // consume '.'
+      if (!isDigit(this.peek())) {
+        this.error(
+          `Número decimal mal formado '${this.currentLexeme()}': se esperaba un dígito después del punto.`,
+        );
+        return;
+      }
+      isFloat = true;
       while (isDigit(this.peek())) this.advance();
+    }
+
+    // A number glued to letters (e.g. `12abc`) is not a valid lexeme.
+    if (isIdentifierStart(this.peek())) {
+      while (isIdentifierPart(this.peek())) this.advance();
+      this.error(
+        `Número mal formado '${this.currentLexeme()}': un identificador no puede empezar con un dígito.`,
+      );
+      return;
     }
 
     const text = this.currentLexeme();
@@ -176,29 +202,56 @@ export class Lexer {
   private scanString(): void {
     let value = '';
 
-    while (this.peek() !== '"' && !this.isAtEnd()) {
+    while (this.peek() !== '"') {
+      // Strings must be closed on the same line.
+      if (this.isAtEnd() || this.peek() === '\n') {
+        this.error('Cadena de texto sin cerrar: falta la comilla doble final.');
+        return;
+      }
+
       const char = this.advance();
-      value += char === '\\' ? this.readEscape() : char;
+      if (char !== '\\') {
+        value += char;
+        continue;
+      }
+
+      const escaped = this.readEscape();
+      if (escaped === null) return; // error already reported
+      value += escaped;
     }
 
     this.advance(); // closing quote
     this.addToken(TokenType.STRING_LITERAL, value);
   }
 
-  /** Called after reading a backslash inside a string. */
-  private readEscape(): string {
-    const char = this.advance();
-    switch (char) {
-      case 'n':
-        return '\n';
-      case 't':
-        return '\t';
-      case '"':
-        return '"';
-      case '\\':
-        return '\\';
-      default:
-        return char;
+  /**
+   * Called after reading a backslash inside a string.
+   * Supported escapes: \n \t \" \\ . Returns `null` on an invalid escape.
+   */
+  private readEscape(): string | null {
+    const escapePosition = { line: this.line, column: this.column - 1 };
+    const char = this.peek();
+
+    if (Object.hasOwn(ESCAPE_SEQUENCES, char)) {
+      this.advance();
+      return ESCAPE_SEQUENCES[char];
+    }
+
+    this.errors.push(
+      createError(
+        'lexical',
+        `Secuencia de escape '\\${char === '\0' ? '' : char}' no válida. Usa \\n, \\t, \\" o \\\\.`,
+        escapePosition,
+      ),
+    );
+    this.skipRestOfString();
+    return null;
+  }
+
+  /** After an invalid escape, skip the rest of the string to avoid cascading errors. */
+  private skipRestOfString(): void {
+    while (!this.isAtEnd() && this.peek() !== '\n') {
+      if (this.advance() === '"') return;
     }
   }
 
@@ -217,6 +270,7 @@ export class Lexer {
       }
       this.advance();
     }
+    this.error("Comentario de bloque sin cerrar: falta '*/'.");
   }
 
   // ---------------------------------------------------------------------
