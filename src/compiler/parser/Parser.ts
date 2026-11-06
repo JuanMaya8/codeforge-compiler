@@ -1,4 +1,5 @@
 import type {
+  BinaryOperator,
   BlockStatement,
   Expression,
   FunctionDeclaration,
@@ -47,6 +48,23 @@ const STATEMENT_START: ReadonlySet<TokenType> = new Set<TokenType>([
   TokenType.RETURN,
   TokenType.PRINT,
 ]);
+
+/** Binary operator tokens mapped to the operator stored in the AST. */
+const BINARY_OPERATORS: Partial<Record<TokenType, BinaryOperator>> = {
+  [TokenType.OR]: '||',
+  [TokenType.AND]: '&&',
+  [TokenType.EQUAL]: '==',
+  [TokenType.NOT_EQUAL]: '!=',
+  [TokenType.LESS]: '<',
+  [TokenType.LESS_EQUAL]: '<=',
+  [TokenType.GREATER]: '>',
+  [TokenType.GREATER_EQUAL]: '>=',
+  [TokenType.PLUS]: '+',
+  [TokenType.MINUS]: '-',
+  [TokenType.STAR]: '*',
+  [TokenType.SLASH]: '/',
+  [TokenType.PERCENT]: '%',
+};
 
 /** Tokens that can begin a primary expression. */
 const PRIMARY_START: ReadonlySet<TokenType> = new Set<TokenType>([
@@ -303,7 +321,112 @@ export class Parser {
   // Expressions
   // ---------------------------------------------------------------------
 
+  /*
+   * Operator precedence, from lowest to highest. Each level is one method
+   * that calls the next (higher) level, so higher-precedence operators end
+   * up deeper in the tree and are evaluated first:
+   *
+   *   assignment  =                 right associative
+   *   logicOr     ||                left associative
+   *   logicAnd    &&                left associative
+   *   equality    == !=             left associative
+   *   comparison  < <= > >=         left associative
+   *   term        + -               left associative
+   *   factor      * / %             left associative
+   *   unary       ! -  (prefix)     right associative
+   *   postfix     call(), index[]
+   *   primary     literals, names, ( ), [ ]
+   */
+
+  /** expression → assignment */
   private expression(): Expression {
+    return this.assignment();
+  }
+
+  /** assignment → logicOr ( "=" assignment )? */
+  private assignment(): Expression {
+    const target = this.logicOr();
+
+    if (this.match(TokenType.ASSIGN)) {
+      const equals = this.previous();
+      // Recursion (instead of a loop) makes `a = b = 1` group as `a = (b = 1)`.
+      const value = this.assignment();
+
+      if (target.kind === 'IdentifierExpression' || target.kind === 'IndexExpression') {
+        return { kind: 'AssignmentExpression', target, value, position: target.position };
+      }
+      this.report(equals, 'Destino de asignación no válido: solo se puede asignar a una variable o a un elemento de un arreglo.');
+    }
+
+    return target;
+  }
+
+  /** logicOr → logicAnd ( "||" logicAnd )* */
+  private logicOr(): Expression {
+    return this.binaryLevel(() => this.logicAnd(), TokenType.OR);
+  }
+
+  /** logicAnd → equality ( "&&" equality )* */
+  private logicAnd(): Expression {
+    return this.binaryLevel(() => this.equality(), TokenType.AND);
+  }
+
+  /** equality → comparison ( ("==" | "!=") comparison )* */
+  private equality(): Expression {
+    return this.binaryLevel(() => this.comparison(), TokenType.EQUAL, TokenType.NOT_EQUAL);
+  }
+
+  /** comparison → term ( ("<" | "<=" | ">" | ">=") term )* */
+  private comparison(): Expression {
+    return this.binaryLevel(
+      () => this.term(),
+      TokenType.LESS,
+      TokenType.LESS_EQUAL,
+      TokenType.GREATER,
+      TokenType.GREATER_EQUAL,
+    );
+  }
+
+  /** term → factor ( ("+" | "-") factor )* */
+  private term(): Expression {
+    return this.binaryLevel(() => this.factor(), TokenType.PLUS, TokenType.MINUS);
+  }
+
+  /** factor → unary ( ("*" | "/" | "%") unary )* */
+  private factor(): Expression {
+    return this.binaryLevel(() => this.unary(), TokenType.STAR, TokenType.SLASH, TokenType.PERCENT);
+  }
+
+  /**
+   * Shared logic of every left-associative binary level:
+   *   operand ( operator operand )*
+   * The loop builds the tree to the left: `a - b - c` → `(a - b) - c`.
+   */
+  private binaryLevel(operand: () => Expression, ...operators: TokenType[]): Expression {
+    let left = operand();
+
+    while (this.match(...operators)) {
+      const operator = BINARY_OPERATORS[this.previous().type];
+      const right = operand();
+      // `operator` is always defined: `operators` only contains binary tokens.
+      left = { kind: 'BinaryExpression', operator: operator!, left, right, position: left.position };
+    }
+
+    return left;
+  }
+
+  /** unary → ("!" | "-") unary | postfix */
+  private unary(): Expression {
+    if (this.match(TokenType.NOT, TokenType.MINUS)) {
+      const operatorToken = this.previous();
+      const operand = this.unary();
+      return {
+        kind: 'UnaryExpression',
+        operator: operatorToken.type === TokenType.NOT ? '!' : '-',
+        operand,
+        position: positionOf(operatorToken),
+      };
+    }
     return this.postfix();
   }
 
