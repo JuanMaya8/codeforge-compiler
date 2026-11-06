@@ -105,7 +105,8 @@ revisiones requeridas y los checks estén claros y el equipo dé el visto bueno.
 - Rama local actual: `feature/runtime`.
 - La prueba local más reciente pasó `npm ci`, `npm test` (9 archivos, 140
   pruebas), `npm run lint`, `npm run build` y el demo `compiler:run`.
-- Los merges de `feature/lexer-parser` y `feature/semantic-ir` están en las
-  ramas locales `develop` y `feature/runtime`; no se han publicado desde este
-  workspace.
-- No se ha realizado push ni merge remoto del PR #1.
+- Los merges locales de `feature/lexer-parser` y `feature/semantic-ir` se
+  incluyeron en `feature/runtime`.
+- El trabajo se publicó en `origin/feature/runtime` con commit `05fce50` a
+  nombre de JuanMaya8. No se ha creado un PR de Runtime ni se ha fusionado el
+  PR #1 de Jack a `develop`.
