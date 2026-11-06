@@ -1,15 +1,22 @@
 import type { SourcePosition } from '../tokens.ts';
 
+export type { SourcePosition };
+
 /**
- * Abstract Syntax Tree (AST) for CodeForge.
+ * Abstract Syntax Tree (AST) for CodeForge — CANONICAL CONTRACT.
+ *
+ * This file is the single AST definition shared by the whole compiler:
+ * the parser produces these nodes and the semantic analyzer and the IR
+ * generator consume them directly (no duplicated or adapted AST).
+ * Changing a node is a contract change and must be agreed by the team.
  *
  * Every node is a plain object with a `kind` field. `kind` is the
  * discriminant of a TypeScript discriminated union: inside
  * `switch (node.kind)` the compiler knows the exact node type, so later
- * phases (semantic analysis, IR generation) can walk the tree safely.
+ * phases can walk the tree safely.
  *
  * Every node also stores `position`: the line and column of the token
- * where the construct starts, for error messages.
+ * where the construct starts, for diagnostics.
  */
 interface BaseNode {
   position: SourcePosition;
@@ -205,3 +212,30 @@ export type Expression =
 export type AstNode = Program | Statement | Expression | Parameter | TypeAnnotation;
 
 export type AstNodeKind = AstNode['kind'];
+
+/**
+ * Every `kind` of the AST, at runtime (useful for tests, tools and the UI).
+ * The contract test checks that this list and `AstNodeKind` stay identical.
+ */
+export const AST_NODE_KINDS = [
+  'Program',
+  'VariableDeclaration',
+  'FunctionDeclaration',
+  'Parameter',
+  'BlockStatement',
+  'IfStatement',
+  'WhileStatement',
+  'ReturnStatement',
+  'PrintStatement',
+  'ExpressionStatement',
+  'AssignmentExpression',
+  'BinaryExpression',
+  'UnaryExpression',
+  'LiteralExpression',
+  'IdentifierExpression',
+  'CallExpression',
+  'ArrayExpression',
+  'IndexExpression',
+  'PrimitiveType',
+  'ArrayType',
+] as const satisfies readonly AstNodeKind[];

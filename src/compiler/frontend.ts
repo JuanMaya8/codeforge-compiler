@@ -48,7 +48,7 @@ export function parseSource(source: string): FrontendResult {
 
 export { tokenize, Lexer, type LexerResult } from './lexer/index.ts';
 export { parseTokens, Parser, type ParserResult } from './parser/index.ts';
-export { printAst, typeToString } from './ast/index.ts';
+export { AST_NODE_KINDS, printAst, typeToString } from './ast/index.ts';
 export type * from './ast/index.ts';
 export { TokenType, KEYWORDS, lookupKeyword } from './tokens.ts';
 export type { Token, SourcePosition, LiteralValue } from './tokens.ts';
