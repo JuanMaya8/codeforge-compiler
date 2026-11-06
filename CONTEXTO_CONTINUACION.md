@@ -14,10 +14,11 @@ el subconjunto que los contratos AST actuales pueden representar.
 
 ## Ramas y GitHub
 
-- Rama activa local: `feature/runtime`, HEAD `b90aaba` antes de publicar esta
-  revisión de los prompts.
+- Rama activa local: `feature/runtime`, HEAD `bccc83f` antes de publicar el
+  plan por responsable.
 - `feature/runtime` se publicó en `origin/feature/runtime`; commit `05fce50`
-  (`feat(runtime): implement IR execution and integration tooling`), autor Git
+  (`feat(runtime): implement IR execution and integration tooling`), y sus
+  documentos se actualizaron en `bccc83f`; autor Git
   `JuanMaya8 <juanmaya@campusucc.edu.co>`.
 - `develop` local: `b7f0c2a`; integra localmente lexer/parser y semantic/IR.
 - `origin/develop`: `f8404df`; no se ha hecho push.
@@ -32,7 +33,8 @@ el subconjunto que los contratos AST actuales pueden representar.
 - El worktree y la referencia locales temporales `integration-review` ya se
   eliminaron. `develop` y `feature/runtime` conservan los commits integrados.
 - El usuario autorizó publicar los cambios actuales en su nombre; ese push ya
-  se realizó. No hagas commits ni pushes adicionales automáticamente.
+  se realizó. Publica futuras actualizaciones de documentación en la rama de
+  Runtime cuando el usuario las solicite; no hagas merges remotos automáticos.
 
 ## Contratos y límite de integración
 
