@@ -1,4 +1,4 @@
-import type { FunctionSymbol, SemanticSymbol } from './symbol-table'
+import type { FunctionSymbol, SemanticSymbol } from './symbol-table.ts'
 
 /**
  * SISTEMA DE SCOPES (ámbitos léxicos)

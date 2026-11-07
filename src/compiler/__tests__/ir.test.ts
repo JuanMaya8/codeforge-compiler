@@ -1,44 +1,48 @@
 import { describe, expect, it } from 'vitest'
-import type { Program } from '../semantic/ast-contract'
-import { analyze } from '../semantic/type-checker'
-import { compileToIR, formatIR, generateIR, type IRProgram } from '../ir'
-import {
-  assign,
-  bin,
-  block,
-  bool,
-  call,
-  cast,
-  exprS,
-  float,
-  fn,
-  id,
-  ifS,
-  int,
-  letVar,
-  print,
-  program,
-  ret,
-  str,
-  un,
-  whileS,
-} from './ast-builders'
-import { runIR } from './reference-interpreter'
+import { compileToIR, formatIR, IR_VERSION, OPCODES, type Instruction } from '../ir/index.ts'
+import demoSource from '../../../examples/demo.cf?raw'
+import { compile, irText, parse, run } from './helpers.ts'
 
-function compile(p: Program): IRProgram {
-  const result = compileToIR(p)
-  if (!result.ok) throw new Error(result.errors.map((e) => e.message).join('\n'))
-  return result.ir
-}
+/** Quita `position` para comparar solo la forma de las instrucciones. */
+const shape = (body: Instruction[]) =>
+  body.map((instruction) => {
+    const copy: Partial<Instruction> = { ...instruction }
+    delete copy.position
+    return copy
+  })
 
-const textOf = (p: Program) => formatIR(compile(p))
-const run = (p: Program) => runIR(compile(p))
+describe('IR — contrato general', () => {
+  it('declara la versión 2.0 y los opcodes de arreglos', () => {
+    expect(IR_VERSION).toBe('2.0')
+    expect(compile('print(1);').version).toBe('2.0')
+    expect(OPCODES).toEqual(expect.arrayContaining(['ARRAY_ALLOC', 'ARRAY_LOAD', 'ARRAY_STORE']))
+  })
+
+  it('no genera IR si hay errores semánticos', () => {
+    const result = compileToIR(parse('print(x);'))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors[0].code).toBe('UNDECLARED_IDENTIFIER')
+  })
+
+  it('el IR es JSON serializable (la VM no necesita interpretar texto)', () => {
+    const ir = compile('let a: int[] = [1, 2]; print(a[0] + 1);')
+    expect(JSON.parse(JSON.stringify(ir))).toEqual(ir)
+  })
+
+  it('cada instrucción conserva la posición del código fuente', () => {
+    const ir = compile('let x: int = 1;\nprint(x / 0);')
+    const binary = ir.main.find((i) => i.op === 'BINARY')
+    // Jack ubica una BinaryExpression en el token donde empieza (el operando izquierdo).
+    expect(binary?.position).toEqual({ line: 2, column: 7 })
+    expect(ir.main.every((i) => i.position !== undefined)).toBe(true)
+    expect(formatIR(ir, { positions: true })).toContain('t1 = x / 0    ; 2:7')
+  })
+})
 
 describe('IR — expresiones y temporales', () => {
-  it('genera código de tres direcciones con temporales para el ejemplo de la guía', () => {
-    // print(5 + 10)
-    const ir = compile(program(print(bin('+', int(5), int(10)))))
-    expect(ir.main).toEqual([
+  it('genera código de tres direcciones con temporales (ejemplo de la guía)', () => {
+    const ir = compile('print(5 + 10);')
+    expect(shape(ir.main)).toEqual([
       {
         op: 'BINARY',
         operator: '+',
@@ -52,95 +56,65 @@ describe('IR — expresiones y temporales', () => {
     expect(formatIR(ir)).toBe('MAIN\n  t1 = 5 + 10\n  PRINT t1\nEND')
   })
 
-  it('respeta la precedencia ya codificada en el AST y numera temporales en orden', () => {
-    // let r = (a + b) * (a - b)
-    const p = program(
-      letVar('a', 'int', int(7)),
-      letVar('b', 'int', int(3)),
-      letVar('r', 'int', bin('*', bin('+', id('a'), id('b')), bin('-', id('a'), id('b')))),
-      print(id('r')),
-    )
-    expect(textOf(p)).toBe(
-      ['MAIN', '  a = 7', '  b = 3', '  t1 = a + b', '  t2 = a - b', '  t3 = t1 * t2', '  r = t3', '  PRINT r', 'END'].join(
+  it('respeta la precedencia y numera los temporales en orden', () => {
+    expect(irText('let a: int = 7; let b: int = 3; let r: int = (a + b) * (a - b);')).toBe(
+      ['MAIN', '  a = 7', '  b = 3', '  t1 = a + b', '  t2 = a - b', '  t3 = t1 * t2', '  r = t3', 'END'].join(
         '\n',
       ),
     )
-    expect(run(p)).toEqual(['40'])
   })
 
-  it('inserta CAST para la conversión implícita int → float', () => {
-    const p = program(letVar('f', 'float', int(2)), print(bin('/', id('f'), int(4))))
-    const ir = compile(p)
-    expect(formatIR(ir)).toContain('t1 = (float) 2')
-    expect(formatIR(ir)).toContain('t2 = (float) 4')
-    expect(ir.main.find((i) => i.op === 'BINARY')).toMatchObject({ operandType: 'float', dest: { type: 'float' } })
-    expect(run(p)).toEqual(['0.5'])
+  it('inserta CAST int → float en operaciones mixtas y asignaciones', () => {
+    const text = irText('let f: float = 1; let g = f + 2;')
+    expect(text).toContain('t1 = (float) 1')
+    expect(text).toContain('t2 = (float) 2')
+    expect(text).toContain('t3 = f + t2')
+    expect(run('let a: int = 7; let f: float = a / 2; print(f); print(7.0 / 2);')).toEqual(['3', '3.5'])
   })
 
-  it('división entera, módulo, unarios, concatenación y casts explícitos', () => {
-    const p = program(
-      print(bin('/', int(7), int(2))),
-      print(bin('%', int(7), int(2))),
-      print(un('-', int(4))),
-      print(un('!', bool(true))),
-      print(bin('+', str('n='), cast('string', int(3)))),
-      print(cast('int', float(9.9))),
+  it('compila && y || con cortocircuito mediante saltos', () => {
+    expect(irText('let a = true && false;')).toBe(
+      ['MAIN', '  t1 = true', '  IF_FALSE t1 GOTO L1', '  t1 = false', 'L1:', '  a = t1', 'END'].join('\n'),
     )
-    expect(run(p)).toEqual(['3', '1', '-4', 'false', 'n=3', '9'])
+    expect(irText('let a = false || true;')).toContain('IF_TRUE t1 GOTO L1')
+    // El lado derecho no se evalúa si no hace falta: no hay división por cero.
+    expect(run('let x: int = 0; print(x != 0 && 10 / x > 1); print(x == 0 || 10 / x > 1);')).toEqual([
+      'false',
+      'true',
+    ])
   })
 
-  it('declaraciones sin inicializador reciben el valor por defecto', () => {
-    const p = program(letVar('i', 'int'), letVar('s', 'string'), letVar('b', 'bool'), print(id('i')), print(id('b')))
-    expect(textOf(p)).toContain('s = ""')
-    expect(run(p)).toEqual(['0', 'false'])
-  })
-
-  it('las variables con shadowing reciben nombres distintos', () => {
-    const p = program(
-      letVar('x', 'int', int(1)),
-      block(letVar('x', 'int', int(2)), print(id('x'))),
-      print(id('x')),
+  it('evalúa unarios, comparaciones, módulo y concatenación', () => {
+    expect(run('print(-3 + 1); print(!true); print(7 % 3); print("a" + "b"); print(2 <= 2.5); print(7 / 2);')).toEqual(
+      ['-2', 'false', '1', 'ab', 'true', '3'],
     )
-    const ir = compile(p)
-    expect(ir.globals.map((g) => g.name)).toEqual(['x', 'x$1'])
-    expect(run(p)).toEqual(['2', '1'])
+  })
+
+  it('la asignación anidada a = b = 1 asigna ambas variables', () => {
+    expect(run('let a: int; let b: int; a = b = 4; print(a); print(b);')).toEqual(['4', '4'])
   })
 })
 
-describe('IR — control de flujo', () => {
+describe('IR — control de flujo, etiquetas y saltos', () => {
   it('if sin else: un salto condicional y una etiqueta', () => {
-    const p = program(letVar('a', 'int', int(5)), ifS(bin('>', id('a'), int(3)), [print(str('mayor'))]))
-    expect(textOf(p)).toBe(
-      ['MAIN', '  a = 5', '  t1 = a > 3', '  IF_FALSE t1 GOTO L1', '  PRINT "mayor"', 'L1:', 'END'].join('\n'),
+    expect(irText('let x: int = 1; if (x > 0) { print(x); }')).toBe(
+      ['MAIN', '  x = 1', '  t1 = x > 0', '  IF_FALSE t1 GOTO L1', '  PRINT x', 'L1:', 'END'].join('\n'),
     )
-    expect(run(p)).toEqual(['mayor'])
   })
 
-  it('if / else if / else', () => {
-    const clasifica = (n: number) =>
-      program(
-        letVar('n', 'int', int(n)),
-        ifS(
-          bin('<', id('n'), int(0)),
-          [print(str('negativo'))],
-          ifS(bin('==', id('n'), int(0)), [print(str('cero'))], [print(str('positivo'))]),
-        ),
-      )
-    expect(run(clasifica(-1))).toEqual(['negativo'])
-    expect(run(clasifica(0))).toEqual(['cero'])
-    expect(run(clasifica(9))).toEqual(['positivo'])
-
-    const text = textOf(clasifica(1))
-    expect(text).toContain('IF_FALSE t1 GOTO L2')
-    expect(text).toContain('GOTO L1')
+  it('if / else if / else genera etiquetas únicas', () => {
+    const source = `
+      let x: int = 0;
+      if (x > 0) { print("pos"); } else if (x < 0) { print("neg"); } else { print("cero"); }
+    `
+    const labels = compile(source).main.filter((i) => i.op === 'LABEL')
+    expect(new Set(labels.map((l) => (l.op === 'LABEL' ? l.name : ''))).size).toBe(labels.length)
+    expect(run(source)).toEqual(['cero'])
   })
 
-  it('while: etiqueta de inicio, salto condicional de salida y salto hacia atrás', () => {
-    const p = program(
-      letVar('i', 'int', int(0)),
-      whileS(bin('<', id('i'), int(3)), [print(id('i')), assign('i', bin('+', id('i'), int(1)))]),
-    )
-    expect(textOf(p)).toBe(
+  it('while: etiqueta de inicio, salida condicional y salto hacia atrás', () => {
+    const source = 'let i: int = 0; while (i < 3) { print(i); i = i + 1; }'
+    expect(irText(source)).toBe(
       [
         'MAIN',
         '  i = 0',
@@ -155,42 +129,19 @@ describe('IR — control de flujo', () => {
         'END',
       ].join('\n'),
     )
-    expect(run(p)).toEqual(['0', '1', '2'])
+    expect(run(source)).toEqual(['0', '1', '2'])
   })
 
-  it('&& y || se evalúan en cortocircuito', () => {
-    // false && f()  → f no debe ejecutarse;  true || f() → tampoco
-    const p = program(
-      fn('f', [], 'bool', [print(str('f llamada')), ret(bool(true))]),
-      print(bin('&&', bool(false), call('f'))),
-      print(bin('||', bool(true), call('f'))),
-      print(bin('&&', bool(true), call('f'))),
-    )
-    expect(run(p)).toEqual(['false', 'true', 'f llamada', 'true'])
-    expect(textOf(p)).toContain('IF_FALSE t1 GOTO L1')
-    expect(textOf(p)).toContain('IF_TRUE t3 GOTO L2')
+  it('resuelve el shadowing con nombres únicos (x, x$1)', () => {
+    const source = 'let x: int = 1; { let x: int = 2; print(x); } print(x);'
+    expect(irText(source)).toContain('x$1 = 2')
+    expect(run(source)).toEqual(['2', '1'])
   })
 })
 
-describe('IR — funciones y llamadas', () => {
-  it('genera PARAM, CALL y RETURN con la convención acordada', () => {
-    const p = program(
-      fn('suma', [['a', 'int'], ['b', 'int']], 'int', [ret(bin('+', id('a'), id('b')))]),
-      print(call('suma', int(2), int(3))),
-    )
-    const ir = compile(p)
-    expect(ir.functions[0]).toMatchObject({
-      name: 'suma',
-      params: [
-        { name: 'a', type: 'int' },
-        { name: 'b', type: 'int' },
-      ],
-      returnType: 'int',
-    })
-    expect(ir.functions[0].body[0]).toMatchObject({
-      op: 'BINARY',
-      left: { kind: 'var', name: 'a', scope: 'local' },
-    })
+describe('IR — funciones, parámetros y retornos', () => {
+  it('emite PARAM en orden y CALL con destino', () => {
+    const ir = compile('function suma(a: int, b: int) -> int { return a + b; } print(suma(2, 3));')
     expect(formatIR(ir)).toBe(
       [
         'FUNCTION suma(a: int, b: int): int',
@@ -206,137 +157,130 @@ describe('IR — funciones y llamadas', () => {
         'END',
       ].join('\n'),
     )
-    expect(runIR(ir)).toEqual(['5'])
+    expect(ir.functions[0]).toMatchObject({
+      name: 'suma',
+      params: [
+        { name: 'a', type: 'int' },
+        { name: 'b', type: 'int' },
+      ],
+      returnType: 'int',
+      locals: [],
+    })
   })
 
-  it('evalúa todos los argumentos antes de emitir los PARAM (llamadas anidadas)', () => {
-    const p = program(
-      fn('suma', [['a', 'int'], ['b', 'int']], 'int', [ret(bin('+', id('a'), id('b')))]),
-      print(call('suma', call('suma', int(1), int(2)), call('suma', int(3), int(4)))),
-    )
-    const ops = compile(p).main.map((i) => i.op)
+  it('las funciones void terminan con RETURN implícito y CALL sin destino', () => {
+    const ir = compile('function hola() { print("hola"); } hola();')
+    expect(shape(ir.functions[0].body).at(-1)).toEqual({ op: 'RETURN', value: null })
+    expect(shape(ir.main)).toEqual([{ op: 'CALL', func: 'hola', argCount: 0, dest: null }])
+    expect(ir.functions[0].returnType).toBe('void')
+  })
+
+  it('no intercala PARAM de llamadas anidadas', () => {
+    const source = `
+      function suma(a: int, b: int) -> int { return a + b; }
+      print(suma(suma(1, 2), suma(3, 4)));
+    `
+    const ops = compile(source).main.map((i) => i.op)
     expect(ops).toEqual(['PARAM', 'PARAM', 'CALL', 'PARAM', 'PARAM', 'CALL', 'PARAM', 'PARAM', 'CALL', 'PRINT'])
-    expect(run(p)).toEqual(['10'])
+    expect(run(source)).toEqual(['10'])
   })
 
-  it('recursión: factorial y fibonacci', () => {
-    const p = program(
-      fn('fact', [['n', 'int']], 'int', [
-        ifS(bin('<=', id('n'), int(1)), [ret(int(1))]),
-        ret(bin('*', id('n'), call('fact', bin('-', id('n'), int(1))))),
-      ]),
-      fn('fib', [['n', 'int']], 'int', [
-        ifS(
-          bin('<', id('n'), int(2)),
-          [ret(id('n'))],
-          [ret(bin('+', call('fib', bin('-', id('n'), int(1))), call('fib', bin('-', id('n'), int(2)))))],
-        ),
-      ]),
-      print(call('fact', int(5))),
-      print(call('fib', int(10))),
-    )
-    expect(run(p)).toEqual(['120', '55'])
-  })
-
-  it('funciones void: RETURN implícito y CALL sin destino', () => {
-    const p = program(
-      fn('saluda', [['nombre', 'string']], 'void', [print(bin('+', str('Hola, '), id('nombre')))]),
-      exprS(call('saluda', str('Juan'))),
-    )
-    const ir = compile(p)
-    expect(ir.functions[0].body.at(-1)).toEqual({ op: 'RETURN', value: null })
-    expect(ir.main.at(-1)).toEqual({ op: 'CALL', func: 'saluda', argCount: 1, dest: null })
-    expect(runIR(ir)).toEqual(['Hola, Juan'])
+  it('variables locales y globales usan zonas distintas', () => {
+    const ir = compile('let g: int = 1; function f() -> int { let l: int = g; return l; } print(f());')
+    expect(ir.globals).toEqual([{ name: 'g', type: 'int' }])
+    expect(ir.functions[0].locals).toEqual([{ name: 'l', type: 'int' }])
+    const [assign] = ir.functions[0].body
+    expect(assign).toMatchObject({
+      op: 'ASSIGN',
+      dest: { kind: 'var', name: 'l', scope: 'local' },
+      src: { kind: 'var', name: 'g', scope: 'global' },
+    })
   })
 
   it('convierte argumentos y retornos int → float', () => {
-    const p = program(
-      fn('mitad', [['x', 'float']], 'float', [ret(bin('/', id('x'), int(2)))]),
-      fn('uno', [], 'float', [ret(int(1))]),
-      print(call('mitad', int(5))),
-      print(call('uno')),
-    )
-    const text = textOf(p)
-    expect(text).toContain('RETURN t')
-    expect(text).toMatch(/t\d+ = \(float\) 5\n {2}PARAM t\d+/)
-    expect(run(p)).toEqual(['2.5', '1'])
+    expect(run('function mitad(x: float) -> float { return x / 2; } print(mitad(5));')).toEqual(['2.5'])
   })
 
-  it('las funciones distinguen locales de globales', () => {
-    const p = program(
-      letVar('contador', 'int', int(0)),
-      fn('incrementa', [], 'void', [
-        letVar('paso', 'int', int(2)),
-        assign('contador', bin('+', id('contador'), id('paso'))),
-      ]),
-      exprS(call('incrementa')),
-      exprS(call('incrementa')),
-      print(id('contador')),
-    )
-    const ir = compile(p)
-    expect(ir.globals).toEqual([{ name: 'contador', type: 'int' }])
-    expect(ir.functions[0].locals).toEqual([{ name: 'paso', type: 'int' }])
-    expect(ir.functions[0].body).toContainEqual({
-      op: 'ASSIGN',
-      dest: { kind: 'var', name: 'contador', scope: 'global', type: 'int' },
-      src: { kind: 'temp', name: 't1', type: 'int' },
-    })
-    expect(runIR(ir)).toEqual(['4'])
+  it('ejecuta recursión (factorial y fibonacci)', () => {
+    expect(
+      run(`
+        function factorial(n: int) -> int { if (n <= 1) { return 1; } return n * factorial(n - 1); }
+        function fib(n: int) -> int { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); }
+        print(factorial(5));
+        print(fib(10));
+      `),
+    ).toEqual(['120', '55'])
   })
 })
 
-describe('IR — ejemplo documentado en ir/README.md', () => {
-  it('genera exactamente el IR del README', () => {
-    const p = program(
-      fn('suma', [['a', 'int'], ['b', 'int']], 'int', [ret(bin('+', id('a'), id('b')))]),
-      letVar('i', 'int', int(0)),
-      whileS(bin('<', id('i'), int(3)), [
-        print(call('suma', id('i'), int(10))),
-        assign('i', bin('+', id('i'), int(1))),
-      ]),
-    )
-    expect(textOf(p)).toBe(
-      [
-        'FUNCTION suma(a: int, b: int): int',
-        '  t1 = a + b',
-        '  RETURN t1',
-        'END',
-        '',
-        'MAIN',
-        '  i = 0',
-        'L1:',
-        '  t2 = i < 3',
-        '  IF_FALSE t2 GOTO L2',
-        '  PARAM i',
-        '  PARAM 10',
-        '  t3 = CALL suma, 2',
-        '  PRINT t3',
-        '  t4 = i + 1',
-        '  i = t4',
-        '  GOTO L1',
-        'L2:',
-        'END',
-      ].join('\n'),
-    )
-    expect(run(p)).toEqual(['10', '11', '12'])
+describe('IR — arreglos', () => {
+  it('un literal genera ARRAY_ALLOC y luego ARRAY_STORE en orden', () => {
+    const ir = compile('let a: int[] = [10, 20];')
+    const intArray = { kind: 'array', elementType: 'int' }
+    const t1 = { kind: 'temp', name: 't1', type: intArray }
+    expect(shape(ir.main)).toEqual([
+      { op: 'ARRAY_ALLOC', dest: t1, elementType: 'int', length: 2 },
+      { op: 'ARRAY_STORE', array: t1, index: { kind: 'const', type: 'int', value: 0 }, value: { kind: 'const', type: 'int', value: 10 } },
+      { op: 'ARRAY_STORE', array: t1, index: { kind: 'const', type: 'int', value: 1 }, value: { kind: 'const', type: 'int', value: 20 } },
+      { op: 'ASSIGN', dest: { kind: 'var', name: 'a', scope: 'global', type: intArray }, src: t1 },
+    ])
+    expect(ir.globals).toEqual([{ name: 'a', type: intArray }])
+  })
+
+  it('indexación y asignación indexada usan ARRAY_LOAD y ARRAY_STORE', () => {
+    const text = irText('let a: int[] = [1, 2]; a[1] = a[0] + 5;')
+    expect(text).toContain('t2 = a[0]')
+    expect(text).toContain('t3 = t2 + 5')
+    expect(text).toContain('a[1] = t3')
+    expect(run('let a: int[] = [1, 2]; a[1] = a[0] + 5; print(a[1]);')).toEqual(['6'])
+  })
+
+  it('un arreglo sin inicializador es un bloque vacío', () => {
+    expect(irText('let a: int[];')).toBe(['MAIN', '  t1 = ARRAY_ALLOC int, 0', '  a = t1', 'END'].join('\n'))
+    expect(() => run('let a: int[]; print(a[0]);')).toThrow('Índice fuera de rango')
+  })
+
+  it('[] toma el tipo del contexto', () => {
+    expect(irText('let m: string[][] = [];')).toContain('t1 = ARRAY_ALLOC string[], 0')
+  })
+
+  it('los arreglos anidados guardan referencias a bloques interiores', () => {
+    const source = 'let m: int[][] = [[1, 2], [3]]; m[1][0] = 30; print(m[0][1]); print(m[1][0]);'
+    const allocs = compile(source).main.filter((i) => i.op === 'ARRAY_ALLOC')
+    expect(allocs.map((a) => (a.op === 'ARRAY_ALLOC' ? a.length : -1))).toEqual([2, 2, 1])
+    expect(allocs[0]).toMatchObject({ elementType: { kind: 'array', elementType: 'int' } })
+    expect(run(source)).toEqual(['2', '30'])
+  })
+
+  it('convierte elementos int a float en un float[]', () => {
+    expect(irText('let f: float[] = [1, 2.5];')).toContain('t2 = (float) 1')
+    expect(run('let f = [1, 2.5]; print(f[0] / 2);')).toEqual(['0.5'])
+  })
+
+  it('asignar un arreglo produce un alias del mismo bloque', () => {
+    expect(run('let a: int[] = [1, 2]; let b: int[] = a; b[0] = 99; print(a[0]);')).toEqual(['99'])
+  })
+
+  it('los arreglos se pasan y se retornan por referencia', () => {
+    expect(
+      run(`
+        function llenar(xs: int[], v: int) { let i: int = 0; while (i < 2) { xs[i] = v; i = i + 1; } }
+        function crear() -> int[] { return [7, 8]; }
+        let a: int[] = crear();
+        llenar(a, 5);
+        print(a[0] + a[1]);
+      `),
+    ).toEqual(['10'])
+  })
+
+  it('los índices fuera de rango los detecta el runtime (no el compilador)', () => {
+    expect(() => run('let a: int[] = [1]; print(a[1]);')).toThrow('Índice fuera de rango')
+    expect(() => run('let a: int[] = [1]; print(a[-1]);')).toThrow('Índice fuera de rango')
   })
 })
 
-describe('IR — integración con el análisis semántico', () => {
-  it('compileToIR no genera IR si hay errores semánticos', () => {
-    const result = compileToIR(program(print(id('nadie'))))
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.errors[0].code).toBe('UNDECLARED_IDENTIFIER')
-  })
-
-  it('generateIR rechaza un SemanticResult con errores', () => {
-    const p = program(print(id('nadie')))
-    expect(() => generateIR(p, analyze(p))).toThrow()
-  })
-
-  it('las instrucciones son objetos tipados y serializables a JSON', () => {
-    const ir = compile(program(letVar('x', 'float', float(1.5)), print(id('x'))))
-    expect(JSON.parse(JSON.stringify(ir))).toEqual(ir)
-    expect(ir.version).toBe('1.0')
+describe('Integración — frontend de Jack → semántico → IR', () => {
+  it('compila y ejecuta examples/demo.cf', () => {
+    expect(run(demoSource)).toEqual(['26', '120'])
   })
 })

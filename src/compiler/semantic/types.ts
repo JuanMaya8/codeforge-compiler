@@ -1,25 +1,28 @@
-import type {
-  BinaryOperator,
-  TypeName,
-  UnaryOperator,
-} from './ast-contract'
-import type { ValueType } from './symbol-table'
+import type { BinaryOperator, TypeAnnotation, UnaryOperator } from '../ast/nodes.ts'
 
 /**
- * REGLAS DEL SISTEMA DE TIPOS
+ * SISTEMA DE TIPOS DE CODEFORGE
  * ============================================================================
- * Tipos: int, float, string, bool (+ void solo como retorno de función).
+ * Tipos de valor (recursivos):
  *
- * Conversiones IMPLÍCITAS (las únicas):
- *   int → float   (ensanchamiento, no pierde información)
- *     - al asignar/declarar/pasar argumento/retornar un int donde se espera float
- *     - en operaciones mixtas int ⊕ float (el int se promueve a float)
+ *   PrimitiveTypeName = 'int' | 'float' | 'string' | 'bool'
+ *   ValueType         = PrimitiveTypeName | { kind: 'array', elementType: ValueType }
  *
- * Conversiones EXPLÍCITAS (CastExpression):
- *   int(x)    desde int | float          (float → int trunca hacia cero)
- *   float(x)  desde int | float
- *   string(x) desde cualquier tipo de valor
- *   Cualquier otra (p. ej. bool → int, string → int) es error INVALID_CAST.
+ *   int[]    → { kind: 'array', elementType: 'int' }
+ *   float[][]→ { kind: 'array', elementType: { kind: 'array', elementType: 'float' } }
+ *
+ * Los primitivos son strings para que sean fáciles de comparar y de leer;
+ * solo los arreglos son objetos. `void` NO es un tipo de valor: solo describe
+ * funciones sin retorno (en el AST, `returnType: null`).
+ *
+ * Conversión IMPLÍCITA (la única que existe):
+ *   int → float  (ensanchamiento; no pierde información). Se aplica al
+ *   inicializar, asignar, pasar argumentos, retornar, en elementos de un
+ *   literal de arreglo y en operaciones mixtas int ⊕ float.
+ *   NO se aplica entre arreglos: un `int[]` no es un `float[]` (los arreglos
+ *   se comparten por referencia; convertirlos rompería el aliasing).
+ *
+ * No hay conversiones explícitas: la gramática del lenguaje no las define.
  *
  * Operadores:
  *   + - * /     numérico ⊕ numérico → int si ambos int, si no float
@@ -27,40 +30,102 @@ import type { ValueType } from './symbol-table'
  *   +           string + string → string (concatenación)
  *   %           int % int → int
  *   < <= > >=   numérico ⊕ numérico → bool
- *   == !=       mismo tipo (o ambos numéricos) → bool
- *   && ||       bool ⊕ bool → bool   (cortocircuito)
+ *   == !=       numérico ⊕ numérico, string ⊕ string o bool ⊕ bool → bool
+ *               (los arreglos NO se comparan)
+ *   && ||       bool ⊕ bool → bool  (cortocircuito)
  *   -x          numérico → mismo tipo
  *   !x          bool → bool
  *
  * No hay "truthiness": las condiciones de if/while deben ser exactamente bool.
  */
 
+export type PrimitiveTypeName = 'int' | 'float' | 'string' | 'bool'
+
+export interface ArrayValueType {
+  kind: 'array'
+  elementType: ValueType
+}
+
+export type ValueType = PrimitiveTypeName | ArrayValueType
+
+/** Tipo de retorno de una función: un valor o `void`. */
+export type ReturnType = ValueType | 'void'
+
 /**
- * `error` es un tipo interno: se asigna a expresiones que ya produjeron un
- * error para no reportar errores en cascada a partir de ellas.
+ * Tipo calculado para una expresión durante el análisis.
+ *  - `void`  → resultado de llamar a una función sin retorno.
+ *  - `error` → la expresión ya produjo un error; se usa para no reportar
+ *              errores en cascada a partir de ella.
  */
-export type CheckedType = TypeName | 'error'
+export type CheckedType = ValueType | 'void' | 'error'
+
+// ─────────────────────────────── Construcción ───────────────────────────────
+
+export function arrayOf(elementType: ValueType): ArrayValueType {
+  return { kind: 'array', elementType }
+}
+
+/** Convierte la anotación del AST (`int[]`) en un tipo semántico. */
+export function fromAnnotation(annotation: TypeAnnotation): ValueType {
+  return annotation.kind === 'PrimitiveType'
+    ? annotation.name
+    : arrayOf(fromAnnotation(annotation.elementType))
+}
+
+// ─────────────────────────────── Consultas ──────────────────────────────────
+
+export function isArray(t: CheckedType): t is ArrayValueType {
+  return typeof t === 'object'
+}
+
+export function isPrimitive(t: CheckedType): t is PrimitiveTypeName {
+  return t === 'int' || t === 'float' || t === 'string' || t === 'bool'
+}
 
 export function isNumeric(t: CheckedType): t is 'int' | 'float' {
   return t === 'int' || t === 'float'
 }
 
+/** Igualdad estructural: `int[]` es igual a `int[]` aunque sean objetos distintos. */
+export function sameType(a: CheckedType, b: CheckedType): boolean {
+  if (isArray(a) && isArray(b)) return sameType(a.elementType, b.elementType)
+  return a === b
+}
+
 /** ¿Se puede usar un valor de tipo `source` donde se espera `target`? */
 export function isAssignable(target: ValueType, source: CheckedType): boolean {
   if (source === 'error') return true // ya se reportó antes
-  return source === target || (target === 'float' && source === 'int')
+  if (source === 'void') return false
+  return sameType(target, source) || (target === 'float' && source === 'int')
 }
 
-/** ¿Hace falta insertar una conversión implícita int→float? */
+/** ¿Hace falta insertar la conversión implícita int → float? */
 export function needsWidening(target: CheckedType, source: CheckedType): boolean {
   return target === 'float' && source === 'int'
 }
 
+/**
+ * Tipo común de dos elementos de un literal de arreglo sin contexto:
+ * iguales → ese tipo; int con float → float; en otro caso, incompatibles.
+ */
+export function commonType(a: ValueType, b: ValueType): ValueType | null {
+  if (sameType(a, b)) return a
+  if (isNumeric(a) && isNumeric(b)) return 'float'
+  return null
+}
+
+/** Texto del tipo para mensajes de error: `int`, `float[][]`, `void`. */
+export function formatType(t: CheckedType): string {
+  return isArray(t) ? `${formatType(t.elementType)}[]` : t
+}
+
+// ─────────────────────────────── Operadores ─────────────────────────────────
+
 export interface BinaryTyping {
   /** Tipo del resultado de la operación. */
-  result: ValueType
+  result: PrimitiveTypeName
   /** Tipo al que se llevan ambos operandos antes de operar (para el IR). */
-  operandType: ValueType
+  operandType: PrimitiveTypeName
 }
 
 /** Devuelve el tipado de la operación o `null` si los tipos son incompatibles. */
@@ -69,34 +134,27 @@ export function binaryTyping(
   left: CheckedType,
   right: CheckedType,
 ): BinaryTyping | null {
-  const numericType: ValueType = left === 'float' || right === 'float' ? 'float' : 'int'
+  const numericType: PrimitiveTypeName = left === 'float' || right === 'float' ? 'float' : 'int'
+  const bothNumeric = isNumeric(left) && isNumeric(right)
 
   switch (op) {
     case '+':
-      if (left === 'string' && right === 'string') {
-        return { result: 'string', operandType: 'string' }
-      }
-      return isNumeric(left) && isNumeric(right)
-        ? { result: numericType, operandType: numericType }
-        : null
+      if (left === 'string' && right === 'string') return { result: 'string', operandType: 'string' }
+      return bothNumeric ? { result: numericType, operandType: numericType } : null
     case '-':
     case '*':
     case '/':
-      return isNumeric(left) && isNumeric(right)
-        ? { result: numericType, operandType: numericType }
-        : null
+      return bothNumeric ? { result: numericType, operandType: numericType } : null
     case '%':
       return left === 'int' && right === 'int' ? { result: 'int', operandType: 'int' } : null
     case '<':
     case '<=':
     case '>':
     case '>=':
-      return isNumeric(left) && isNumeric(right)
-        ? { result: 'bool', operandType: numericType }
-        : null
+      return bothNumeric ? { result: 'bool', operandType: numericType } : null
     case '==':
     case '!=':
-      if (isNumeric(left) && isNumeric(right)) return { result: 'bool', operandType: numericType }
+      if (bothNumeric) return { result: 'bool', operandType: numericType }
       if (left === right && (left === 'string' || left === 'bool')) {
         return { result: 'bool', operandType: left }
       }
@@ -107,15 +165,7 @@ export function binaryTyping(
   }
 }
 
-export function unaryResultType(op: UnaryOperator, operand: CheckedType): ValueType | null {
+export function unaryResultType(op: UnaryOperator, operand: CheckedType): PrimitiveTypeName | null {
   if (op === '-') return isNumeric(operand) ? operand : null
   return operand === 'bool' ? 'bool' : null
-}
-
-export function isCastAllowed(from: CheckedType, to: ValueType): boolean {
-  if (from === 'error') return true
-  if (from === 'void') return false
-  if (from === to) return true
-  if (to === 'string') return true
-  return isNumeric(from) && isNumeric(to)
 }

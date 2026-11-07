@@ -1,39 +1,47 @@
 import type {
+  ArrayExpression,
+  AssignmentExpression,
   CallExpression,
   Expression,
   FunctionDeclaration,
   IfStatement,
+  IndexExpression,
   Program,
   Statement,
-  VarDeclaration,
-} from '../semantic/ast-contract'
-import type { SemanticResult } from '../semantic/type-checker'
-import type { FunctionSymbol, ValueType, VariableSymbol } from '../semantic/symbol-table'
-import { binaryTyping, type CheckedType } from '../semantic/types'
+  VariableDeclaration,
+} from '../ast/nodes.ts'
+import type { SourcePosition } from '../tokens.ts'
+import type { FunctionSymbol, VariableSymbol } from '../semantic/symbol-table.ts'
+import type { SemanticResult } from '../semantic/type-checker.ts'
+import { binaryTyping, isArray, needsWidening, type ValueType } from '../semantic/types.ts'
 import {
   IR_VERSION,
-  defaultValue,
   type ConstOperand,
   type IRFunction,
+  type IRPrimitiveType,
   type IRProgram,
   type IRReturnType,
+  type IRType,
   type IRVariable,
   type Instruction,
   type Operand,
   type TempOperand,
   type VarOperand,
-} from './instructions'
+} from './instructions.ts'
 
 /**
  * GENERADOR DE IR (código de tres direcciones)
  * ============================================================================
  * Requisito: el programa ya pasó el análisis semántico sin errores. El
- * generador confía en las anotaciones de `SemanticResult` (tipos de cada
+ * generador confía en las anotaciones de `SemanticResult` (tipo de cada
  * expresión y símbolo de cada identificador), por eso no vuelve a validar.
+ *
+ * Los tipos semánticos (`ValueType`) y los del IR (`IRType`) tienen la misma
+ * forma, así que se pasan directamente.
  *
  * Esquema de traducción (E = expresión, S = sentencia):
  *
- *   E1 op E2       →  [código E1] [código E2]  tN = a op b
+ *   E1 op E2       →  [E1] [E2]  tN = a op b
  *   E1 && E2       →  t = a ; IF_FALSE t GOTO Lend ; t = b ; Lend:
  *   E1 || E2       →  t = a ; IF_TRUE  t GOTO Lend ; t = b ; Lend:
  *   if (C) S1      →  [C] IF_FALSE c GOTO Lend ; [S1] ; Lend:
@@ -42,8 +50,14 @@ import {
  *                     Lelse: [S2] ; Lend:
  *   while (C) S    →  Lstart: [C] IF_FALSE c GOTO Lend ; [S] ; GOTO Lstart ; Lend:
  *   f(a, b)        →  [a] [b] PARAM a ; PARAM b ; t = CALL f, 2
+ *   x = E          →  [E] x = e
+ *   [E1, E2]       →  t = ARRAY_ALLOC T, 2 ; [E1] t[0] = e1 ; [E2] t[1] = e2
+ *   A[I]           →  [A] [I] tN = a[i]               (ARRAY_LOAD)
+ *   A[I] = E       →  [A] [I] [E] a[i] = e            (ARRAY_STORE)
  *
+ * Orden de evaluación: siempre de izquierda a derecha.
  * Las conversiones implícitas int→float se hacen visibles con CAST.
+ * Cada instrucción lleva la `position` del nodo del AST que la originó.
  */
 export class IRGenerator {
   private readonly semantic: SemanticResult
@@ -102,9 +116,8 @@ export class IRGenerator {
     for (const stmt of decl.body.body) this.genStatement(stmt)
 
     // Las funciones void pueden terminar sin `return` explícito.
-    const last = body.at(-1)
-    if (fn.returnType === 'void' && last?.op !== 'RETURN') {
-      this.emit({ op: 'RETURN', value: null })
+    if (fn.returnType === 'void' && body.at(-1)?.op !== 'RETURN') {
+      this.emit({ op: 'RETURN', value: null }, decl.body.position)
     }
 
     const result: IRFunction = {
@@ -123,11 +136,11 @@ export class IRGenerator {
 
   private genStatement(stmt: Statement): void {
     switch (stmt.kind) {
-      case 'VarDeclaration':
-        return this.genVarDeclaration(stmt)
+      case 'VariableDeclaration':
+        return this.genVariableDeclaration(stmt)
       case 'FunctionDeclaration':
-        return // las funciones anidadas son rechazadas por el análisis semántico
-      case 'Block':
+        return // solo existen en el nivel superior; se generan en `generate`
+      case 'BlockStatement':
         stmt.body.forEach((s) => this.genStatement(s))
         return
       case 'IfStatement':
@@ -135,132 +148,122 @@ export class IRGenerator {
       case 'WhileStatement': {
         const start = this.newLabel()
         const end = this.newLabel()
-        this.emit({ op: 'LABEL', name: start })
+        this.emit({ op: 'LABEL', name: start }, stmt.position)
         const condition = this.genExpression(stmt.condition)
-        this.emit({ op: 'JUMP_IF_FALSE', condition, target: end })
+        this.emit({ op: 'JUMP_IF_FALSE', condition, target: end }, stmt.condition.position)
         this.genStatement(stmt.body)
-        this.emit({ op: 'JUMP', target: start })
-        this.emit({ op: 'LABEL', name: end })
+        this.emit({ op: 'JUMP', target: start }, stmt.position)
+        this.emit({ op: 'LABEL', name: end }, stmt.position)
         return
       }
       case 'ReturnStatement': {
-        if (!stmt.value || this.currentReturnType === 'void') {
-          this.emit({ op: 'RETURN', value: null })
+        if (!stmt.argument || this.currentReturnType === 'void') {
+          this.emit({ op: 'RETURN', value: null }, stmt.position)
           return
         }
-        const value = this.genExpression(stmt.value)
-        this.emit({
-          op: 'RETURN',
-          value: this.coerce(value, this.typeOf(stmt.value), this.currentReturnType),
-        })
+        const value = this.genValue(stmt.argument, this.currentReturnType)
+        this.emit({ op: 'RETURN', value }, stmt.position)
         return
       }
       case 'PrintStatement':
-        this.emit({ op: 'PRINT', value: this.genExpression(stmt.argument) })
+        this.emit({ op: 'PRINT', value: this.genExpression(stmt.argument) }, stmt.position)
         return
-      case 'AssignmentStatement': {
-        const symbol = this.semantic.resolutions.get(stmt.target) as VariableSymbol
-        const value = this.genExpression(stmt.value)
-        this.emit({
-          op: 'ASSIGN',
-          dest: this.varOperand(symbol),
-          src: this.coerce(value, this.typeOf(stmt.value), symbol.type),
-        })
+      case 'ExpressionStatement': {
+        // El resultado se descarta: no hace falta reservar temporales para él.
+        const { expression } = stmt
+        if (expression.kind === 'CallExpression') this.genCall(expression, false)
+        else if (expression.kind === 'AssignmentExpression') this.genAssignment(expression, false)
+        else this.genExpression(expression)
         return
       }
-      case 'ExpressionStatement':
-        if (stmt.expression.kind === 'CallExpression') {
-          this.genCall(stmt.expression, false) // el resultado se descarta
-        } else {
-          this.genExpression(stmt.expression)
-        }
-        return
     }
   }
 
-  private genVarDeclaration(decl: VarDeclaration): void {
+  private genVariableDeclaration(decl: VariableDeclaration): void {
     const symbol = this.semantic.resolutions.get(decl) as VariableSymbol
-    const variable = { name: symbol.irName, type: symbol.type }
+    const variable: IRVariable = { name: symbol.irName, type: symbol.type }
     if (symbol.storage === 'global') this.globals.set(variable.name, variable)
     else this.locals?.set(variable.name, variable)
 
-    const src: Operand = decl.initializer
-      ? this.coerce(this.genExpression(decl.initializer), this.typeOf(decl.initializer), symbol.type)
-      : this.constant(symbol.type, defaultValue(symbol.type))
-    this.emit({ op: 'ASSIGN', dest: this.varOperand(symbol), src })
+    let src: Operand
+    if (decl.initializer) {
+      src = this.genValue(decl.initializer, symbol.type)
+    } else if (isArray(symbol.type)) {
+      // `let a: int[];` → arreglo vacío (un bloque de longitud 0 en el Heap).
+      src = this.allocArray(symbol.type, 0, decl.position)
+    } else {
+      src = this.constant(symbol.type, defaultPrimitive(symbol.type))
+    }
+    this.emit({ op: 'ASSIGN', dest: this.varOperand(symbol), src }, decl.position)
   }
 
   private genIf(stmt: IfStatement): void {
     const condition = this.genExpression(stmt.condition)
     const end = this.newLabel()
     if (!stmt.alternate) {
-      this.emit({ op: 'JUMP_IF_FALSE', condition, target: end })
+      this.emit({ op: 'JUMP_IF_FALSE', condition, target: end }, stmt.condition.position)
       this.genStatement(stmt.consequent)
-      this.emit({ op: 'LABEL', name: end })
+      this.emit({ op: 'LABEL', name: end }, stmt.position)
       return
     }
     const elseLabel = this.newLabel()
-    this.emit({ op: 'JUMP_IF_FALSE', condition, target: elseLabel })
+    this.emit({ op: 'JUMP_IF_FALSE', condition, target: elseLabel }, stmt.condition.position)
     this.genStatement(stmt.consequent)
-    this.emit({ op: 'JUMP', target: end })
-    this.emit({ op: 'LABEL', name: elseLabel })
+    this.emit({ op: 'JUMP', target: end }, stmt.position)
+    this.emit({ op: 'LABEL', name: elseLabel }, stmt.alternate.position)
     this.genStatement(stmt.alternate)
-    this.emit({ op: 'LABEL', name: end })
+    this.emit({ op: 'LABEL', name: end }, stmt.position)
   }
 
   // ═══════════════════════════ Expresiones ══════════════════════════
 
+  /** Genera la expresión y la convierte (si hace falta) al tipo esperado `to`. */
+  private genValue(expr: Expression, to: ValueType): Operand {
+    return this.coerce(this.genExpression(expr), this.typeOf(expr), to, expr.position)
+  }
+
   /** Genera el código de la expresión y devuelve el operando con su resultado. */
   private genExpression(expr: Expression): Operand {
     switch (expr.kind) {
-      case 'IntLiteral':
-        return this.constant('int', expr.value)
-      case 'FloatLiteral':
-        return this.constant('float', expr.value)
-      case 'StringLiteral':
-        return this.constant('string', expr.value)
-      case 'BoolLiteral':
-        return this.constant('bool', expr.value)
+      case 'LiteralExpression':
+        return this.constant(expr.literalType, expr.value)
 
-      case 'Identifier':
+      case 'IdentifierExpression':
         return this.varOperand(this.semantic.resolutions.get(expr) as VariableSymbol)
 
       case 'BinaryExpression': {
         if (expr.operator === '&&' || expr.operator === '||') {
           const dest = this.newTemp('bool')
           const end = this.newLabel()
-          this.emit({ op: 'ASSIGN', dest, src: this.genExpression(expr.left) })
-          this.emit({
-            op: expr.operator === '&&' ? 'JUMP_IF_FALSE' : 'JUMP_IF_TRUE',
-            condition: dest,
-            target: end,
-          })
-          this.emit({ op: 'ASSIGN', dest, src: this.genExpression(expr.right) })
-          this.emit({ op: 'LABEL', name: end })
+          this.emit({ op: 'ASSIGN', dest, src: this.genExpression(expr.left) }, expr.position)
+          this.emit(
+            {
+              op: expr.operator === '&&' ? 'JUMP_IF_FALSE' : 'JUMP_IF_TRUE',
+              condition: dest,
+              target: end,
+            },
+            expr.position,
+          )
+          this.emit({ op: 'ASSIGN', dest, src: this.genExpression(expr.right) }, expr.position)
+          this.emit({ op: 'LABEL', name: end }, expr.position)
           return dest
         }
-        const leftType = this.typeOf(expr.left)
-        const rightType = this.typeOf(expr.right)
-        const typing = binaryTyping(expr.operator, leftType, rightType)
+        const typing = binaryTyping(expr.operator, this.typeOf(expr.left), this.typeOf(expr.right))
         if (!typing) throw new Error(`IRGenerator: operación sin tipado válido '${expr.operator}'`)
-        const left = this.coerce(this.genExpression(expr.left), leftType, typing.operandType)
-        const right = this.coerce(this.genExpression(expr.right), rightType, typing.operandType)
+        const left = this.genValue(expr.left, typing.operandType)
+        const right = this.genValue(expr.right, typing.operandType)
         const dest = this.newTemp(typing.result)
-        this.emit({
-          op: 'BINARY',
-          operator: expr.operator,
-          operandType: typing.operandType,
-          dest,
-          left,
-          right,
-        })
+        this.emit(
+          { op: 'BINARY', operator: expr.operator, operandType: typing.operandType, dest, left, right },
+          expr.position,
+        )
         return dest
       }
 
       case 'UnaryExpression': {
         const src = this.genExpression(expr.operand)
         const dest = this.newTemp(this.typeOf(expr))
-        this.emit({ op: 'UNARY', operator: expr.operator, dest, src })
+        this.emit({ op: 'UNARY', operator: expr.operator, dest, src }, expr.position)
         return dest
       }
 
@@ -270,48 +273,109 @@ export class IRGenerator {
         return result
       }
 
-      case 'CastExpression': {
-        const src = this.genExpression(expr.expression)
-        const from = this.typeOf(expr.expression)
-        if (from === expr.targetType) return src
-        const dest = this.newTemp(expr.targetType)
-        this.emit({ op: 'CAST', from, to: expr.targetType, dest, src })
+      case 'AssignmentExpression':
+        return this.genAssignment(expr, true) as Operand
+
+      case 'ArrayExpression':
+        return this.genArrayLiteral(expr)
+
+      case 'IndexExpression': {
+        const array = this.genExpression(expr.object)
+        const index = this.genExpression(expr.index)
+        const dest = this.newTemp(this.typeOf(expr))
+        this.emit({ op: 'ARRAY_LOAD', dest, array, index }, expr.position)
         return dest
       }
     }
   }
 
   /**
+   * `destino = valor`. Con `wantResult` devuelve el operando con el valor
+   * asignado, para usos anidados como `a = b = 1` o `print(x = 5)`.
+   */
+  private genAssignment(expr: AssignmentExpression, wantResult: boolean): Operand | null {
+    const { target } = expr
+
+    if (target.kind === 'IdentifierExpression') {
+      const symbol = this.semantic.resolutions.get(target) as VariableSymbol
+      let value = this.genValue(expr.value, symbol.type)
+      // Si el valor es otra variable, se copia a un temporal: así el resultado
+      // no cambia aunque esa variable se modifique más adelante en la expresión.
+      if (wantResult && value.kind === 'var') {
+        const copy = this.newTemp(value.type)
+        this.emit({ op: 'ASSIGN', dest: copy, src: value }, expr.position)
+        value = copy
+      }
+      this.emit({ op: 'ASSIGN', dest: this.varOperand(symbol), src: value }, expr.position)
+      return wantResult ? value : null
+    }
+
+    return this.genIndexStore(target, expr)
+  }
+
+  /** `a[i] = v` → evalúa a, i y v (en ese orden) y emite ARRAY_STORE. */
+  private genIndexStore(target: IndexExpression, expr: AssignmentExpression): Operand {
+    const array = this.genExpression(target.object)
+    const index = this.genExpression(target.index)
+    const value = this.genValue(expr.value, this.typeOf(target))
+    this.emit({ op: 'ARRAY_STORE', array, index, value }, expr.position)
+    return value
+  }
+
+  /**
+   * `[e1, e2, ...]` → reserva el bloque y guarda cada elemento en orden.
+   * En arreglos anidados, cada literal interior genera su propio bloque y la
+   * celda del exterior guarda la referencia a él.
+   */
+  private genArrayLiteral(expr: ArrayExpression): TempOperand {
+    const type = this.typeOf(expr)
+    if (!isArray(type)) throw new Error('IRGenerator: literal de arreglo sin tipo arreglo')
+    const array = this.allocArray(type, expr.elements.length, expr.position)
+    expr.elements.forEach((element, i) => {
+      const value = this.genValue(element, type.elementType)
+      this.emit(
+        { op: 'ARRAY_STORE', array, index: this.constant('int', i), value },
+        element.position,
+      )
+    })
+    return array
+  }
+
+  /**
    * Convención de llamada: primero se evalúan TODOS los argumentos (que
    * podrían contener otras llamadas) y después se emiten los PARAM seguidos,
    * para que nunca se intercalen PARAM de llamadas distintas.
+   * Los arreglos se pasan por referencia (el PARAM lleva la referencia).
    */
   private genCall(call: CallExpression, wantResult: boolean): TempOperand | null {
     const fn = this.semantic.resolutions.get(call) as FunctionSymbol
-    const args = call.args.map((arg, i) =>
-      this.coerce(this.genExpression(arg), this.typeOf(arg), fn.params[i].type),
-    )
-    args.forEach((value) => this.emit({ op: 'PARAM', value }))
+    const args = call.args.map((arg, i) => this.genValue(arg, fn.params[i].type))
+    args.forEach((value) => this.emit({ op: 'PARAM', value }, call.position))
     const dest = wantResult && fn.returnType !== 'void' ? this.newTemp(fn.returnType) : null
-    this.emit({ op: 'CALL', func: fn.name, argCount: args.length, dest })
+    this.emit({ op: 'CALL', func: fn.name, argCount: args.length, dest }, call.position)
     return dest
   }
 
   // ════════════════════════════ Utilidades ══════════════════════════
 
   /** Inserta un CAST si hace falta la conversión implícita int → float. */
-  private coerce(value: Operand, from: ValueType, to: ValueType): Operand {
-    if (from === 'int' && to === 'float') {
-      const dest = this.newTemp('float')
-      this.emit({ op: 'CAST', from: 'int', to: 'float', dest, src: value })
-      return dest
-    }
-    return value
+  private coerce(value: Operand, from: ValueType, to: ValueType, position: SourcePosition): Operand {
+    if (!needsWidening(to, from)) return value
+    const dest = this.newTemp('float')
+    this.emit({ op: 'CAST', from: 'int', to: 'float', dest, src: value }, position)
+    return dest
+  }
+
+  private allocArray(type: IRType, length: number, position: SourcePosition): TempOperand {
+    if (!isArray(type)) throw new Error('IRGenerator: ARRAY_ALLOC requiere un tipo arreglo')
+    const dest = this.newTemp(type)
+    this.emit({ op: 'ARRAY_ALLOC', dest, elementType: type.elementType, length }, position)
+    return dest
   }
 
   private typeOf(expr: Expression): ValueType {
-    const type: CheckedType | undefined = this.semantic.expressionTypes.get(expr)
-    if (!type || type === 'error' || type === 'void') {
+    const type = this.semantic.expressionTypes.get(expr)
+    if (type === undefined || type === 'error' || type === 'void') {
       throw new Error(`IRGenerator: la expresión ${expr.kind} no tiene un tipo de valor válido`)
     }
     return type
@@ -321,11 +385,11 @@ export class IRGenerator {
     return { kind: 'var', name: symbol.irName, scope: symbol.storage, type: symbol.type }
   }
 
-  private constant(type: ValueType, value: ConstOperand['value']): ConstOperand {
+  private constant(type: IRPrimitiveType, value: ConstOperand['value']): ConstOperand {
     return { kind: 'const', type, value }
   }
 
-  private newTemp(type: ValueType): TempOperand {
+  private newTemp(type: IRType): TempOperand {
     return { kind: 'temp', name: `t${++this.tempCounter}`, type }
   }
 
@@ -333,8 +397,21 @@ export class IRGenerator {
     return `L${++this.labelCounter}`
   }
 
-  private emit(instruction: Instruction): void {
+  private emit(instruction: Instruction, position: SourcePosition): void {
+    instruction.position = { line: position.line, column: position.column }
     this.code.push(instruction)
+  }
+}
+
+function defaultPrimitive(type: IRPrimitiveType): ConstOperand['value'] {
+  switch (type) {
+    case 'int':
+    case 'float':
+      return 0
+    case 'string':
+      return ''
+    case 'bool':
+      return false
   }
 }
 

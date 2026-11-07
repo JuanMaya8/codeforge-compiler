@@ -1,50 +1,76 @@
-import type { SourceLocation } from './ast-contract'
+import { createDiagnostic, type CompilerDiagnostic } from '../errors.ts'
+import type { SourcePosition } from '../tokens.ts'
 
 /**
  * Catálogo de errores semánticos.
  *
- * Cada error tiene un código estable (útil para pruebas y para la UI) y un
- * mensaje legible en español. El analizador NO se detiene en el primer error:
- * los acumula para mostrarlos todos al usuario.
+ * Los errores usan el contrato común `CompilerDiagnostic` (`src/compiler/errors.ts`)
+ * con `phase: 'semantic'`, un `code` estable (útil para pruebas y para la UI),
+ * un mensaje en español y la posición del nodo del AST que causó el error.
+ *
+ * El analizador NO se detiene en el primer error: los acumula todos.
  */
-export type SemanticErrorCode =
-  | 'UNDECLARED_IDENTIFIER' // uso de una variable no declarada
-  | 'DUPLICATE_DECLARATION' // mismo nombre dos veces en el mismo scope
-  | 'CONST_REASSIGNMENT' // asignar a una constante
-  | 'CONST_WITHOUT_INITIALIZER' // `const x: int;`
-  | 'MISSING_TYPE' // `let x;` sin tipo ni inicializador
-  | 'INVALID_ASSIGNMENT' // asignar a algo que no es variable (p. ej. una función)
-  | 'TYPE_MISMATCH' // tipo del valor incompatible con el esperado
-  | 'INVALID_OPERAND_TYPES' // operación entre tipos incompatibles
-  | 'INVALID_CONDITION' // condición de if/while que no es bool
-  | 'INVALID_CAST' // conversión explícita no soportada
-  | 'VOID_VALUE' // usar el resultado de una función void como valor
-  | 'INVALID_VOID_VARIABLE' // `let x: void`
-  | 'UNDEFINED_FUNCTION' // llamar a una función inexistente
-  | 'NOT_A_FUNCTION' // llamar a algo que no es función
-  | 'FUNCTION_AS_VALUE' // usar una función como si fuera variable
-  | 'ARGUMENT_COUNT_MISMATCH' // número de argumentos incorrecto
-  | 'RETURN_OUTSIDE_FUNCTION' // `return` fuera de una función
-  | 'RETURN_TYPE_MISMATCH' // `return` con tipo incorrecto / con o sin valor indebido
-  | 'MISSING_RETURN' // función no-void con caminos sin `return`
-  | 'NESTED_FUNCTION' // declarar funciones dentro de otras / dentro de bloques
+export const SemanticErrorCode = {
+  /** Uso de una variable que no fue declarada. */
+  UNDECLARED_IDENTIFIER: 'UNDECLARED_IDENTIFIER',
+  /** El mismo nombre declarado dos veces en el mismo scope. */
+  DUPLICATE_DECLARATION: 'DUPLICATE_DECLARATION',
+  /** Asignar a una constante. */
+  CONST_REASSIGNMENT: 'CONST_REASSIGNMENT',
+  /** `const x: int;` (el parser ya lo impide; se revisa por robustez). */
+  CONST_WITHOUT_INITIALIZER: 'CONST_WITHOUT_INITIALIZER',
+  /** `let x;` sin tipo ni valor (el parser ya lo impide; se revisa por robustez). */
+  MISSING_TYPE: 'MISSING_TYPE',
+  /** Asignar a algo que no es una variable (p. ej. a una función). */
+  INVALID_ASSIGNMENT: 'INVALID_ASSIGNMENT',
+  /** El tipo de un valor no es compatible con el esperado. */
+  TYPE_MISMATCH: 'TYPE_MISMATCH',
+  /** Operación entre tipos incompatibles. */
+  INVALID_OPERAND_TYPES: 'INVALID_OPERAND_TYPES',
+  /** La condición de un if/while no es bool. */
+  INVALID_CONDITION: 'INVALID_CONDITION',
+  /** Usar el resultado de una función void como valor. */
+  VOID_VALUE: 'VOID_VALUE',
+  /** Llamar a una función que no existe. */
+  UNDEFINED_FUNCTION: 'UNDEFINED_FUNCTION',
+  /** Llamar a algo que no es una función. */
+  NOT_A_FUNCTION: 'NOT_A_FUNCTION',
+  /** Usar el nombre de una función como si fuera una variable. */
+  FUNCTION_AS_VALUE: 'FUNCTION_AS_VALUE',
+  /** Número de argumentos distinto al de parámetros. */
+  ARGUMENT_COUNT_MISMATCH: 'ARGUMENT_COUNT_MISMATCH',
+  /** `return` fuera de una función. */
+  RETURN_OUTSIDE_FUNCTION: 'RETURN_OUTSIDE_FUNCTION',
+  /** `return` con un tipo incorrecto, o con/sin valor cuando no corresponde. */
+  RETURN_TYPE_MISMATCH: 'RETURN_TYPE_MISMATCH',
+  /** Función con valor de retorno que tiene caminos sin `return`. */
+  MISSING_RETURN: 'MISSING_RETURN',
+  /** Función declarada fuera del nivel superior (el parser ya lo impide). */
+  NESTED_FUNCTION: 'NESTED_FUNCTION',
+  /** Indexar (`x[i]`) algo que no es un arreglo. */
+  NOT_AN_ARRAY: 'NOT_AN_ARRAY',
+  /** El índice de un arreglo no es int. */
+  INVALID_INDEX_TYPE: 'INVALID_INDEX_TYPE',
+  /** Elementos de un literal de arreglo con tipos incompatibles: `[1, "a"]`. */
+  HETEROGENEOUS_ARRAY: 'HETEROGENEOUS_ARRAY',
+  /** `[]` sin un tipo esperado del que deducir su tipo: `let a = [];`. */
+  EMPTY_ARRAY_WITHOUT_TYPE: 'EMPTY_ARRAY_WITHOUT_TYPE',
+  /** `print` solo acepta valores primitivos (no arreglos). */
+  INVALID_PRINT_ARGUMENT: 'INVALID_PRINT_ARGUMENT',
+} as const
 
-export interface SemanticError {
+export type SemanticErrorCode = (typeof SemanticErrorCode)[keyof typeof SemanticErrorCode]
+
+/** Un diagnóstico de la fase semántica (forma común a todo el compilador). */
+export type SemanticDiagnostic = CompilerDiagnostic & {
+  phase: 'semantic'
   code: SemanticErrorCode
-  message: string
-  loc?: SourceLocation
 }
 
 export function semanticError(
   code: SemanticErrorCode,
   message: string,
-  loc?: SourceLocation,
-): SemanticError {
-  return { code, message, loc }
-}
-
-/** Formato legible: `[3:5] TYPE_MISMATCH: ...` */
-export function formatSemanticError(error: SemanticError): string {
-  const where = error.loc ? `[${error.loc.line}:${error.loc.column}] ` : ''
-  return `${where}${error.code}: ${error.message}`
+  position?: SourcePosition,
+): SemanticDiagnostic {
+  return createDiagnostic({ phase: 'semantic', code, message, position }) as SemanticDiagnostic
 }

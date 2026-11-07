@@ -1,10 +1,21 @@
-import type { IRFunction, IRProgram, Instruction, Operand } from './instructions'
+import {
+  formatIRType,
+  type IRFunction,
+  type IRProgram,
+  type Instruction,
+  type Operand,
+} from './instructions.ts'
 
 /**
  * Representación TEXTUAL del IR, solo para mostrar/depurar (UI, pruebas,
  * sustentación). El runtime NO debe parsear este texto: debe consumir los
  * objetos de `instructions.ts`.
  */
+
+export interface FormatIROptions {
+  /** Agrega `; línea:columna` al final de cada instrucción con posición. */
+  positions?: boolean
+}
 
 export function formatOperand(operand: Operand): string {
   if (operand.kind !== 'const') return operand.name
@@ -45,20 +56,35 @@ export function formatInstruction(ins: Instruction): string {
       return ins.value ? `RETURN ${o(ins.value)}` : 'RETURN'
     case 'PRINT':
       return `PRINT ${o(ins.value)}`
+    case 'ARRAY_ALLOC':
+      return `${ins.dest.name} = ARRAY_ALLOC ${formatIRType(ins.elementType)}, ${ins.length}`
+    case 'ARRAY_LOAD':
+      return `${ins.dest.name} = ${o(ins.array)}[${o(ins.index)}]`
+    case 'ARRAY_STORE':
+      return `${o(ins.array)}[${o(ins.index)}] = ${o(ins.value)}`
   }
 }
 
-function formatBody(body: Instruction[]): string[] {
-  return body.map((ins) => (ins.op === 'LABEL' ? formatInstruction(ins) : `  ${formatInstruction(ins)}`))
+function formatBody(body: Instruction[], options: FormatIROptions): string[] {
+  return body.map((ins) => {
+    const text = ins.op === 'LABEL' ? formatInstruction(ins) : `  ${formatInstruction(ins)}`
+    return options.positions && ins.position
+      ? `${text}    ; ${ins.position.line}:${ins.position.column}`
+      : text
+  })
 }
 
-function formatFunction(fn: IRFunction): string {
-  const params = fn.params.map((p) => `${p.name}: ${p.type}`).join(', ')
-  return [`FUNCTION ${fn.name}(${params}): ${fn.returnType}`, ...formatBody(fn.body), 'END'].join('\n')
+function formatFunction(fn: IRFunction, options: FormatIROptions): string {
+  const params = fn.params.map((p) => `${p.name}: ${formatIRType(p.type)}`).join(', ')
+  return [
+    `FUNCTION ${fn.name}(${params}): ${formatIRType(fn.returnType)}`,
+    ...formatBody(fn.body, options),
+    'END',
+  ].join('\n')
 }
 
-export function formatIR(program: IRProgram): string {
-  const parts = program.functions.map(formatFunction)
-  parts.push(['MAIN', ...formatBody(program.main), 'END'].join('\n'))
+export function formatIR(program: IRProgram, options: FormatIROptions = {}): string {
+  const parts = program.functions.map((fn) => formatFunction(fn, options))
+  parts.push(['MAIN', ...formatBody(program.main, options), 'END'].join('\n'))
   return parts.join('\n\n')
 }

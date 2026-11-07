@@ -1,5 +1,6 @@
-import type { SourceLocation, TypeName } from './ast-contract'
-import { Scope, type ScopeKind } from './scope'
+import type { SourcePosition } from '../tokens.ts'
+import { Scope, type ScopeKind } from './scope.ts'
+import { formatType, type ReturnType, type ValueType } from './types.ts'
 
 /**
  * TABLA DE SÍMBOLOS
@@ -15,9 +16,6 @@ import { Scope, type ScopeKind } from './scope'
  *   { let x = 2; }  → irName "x$1"
  */
 
-/** Tipos que puede tener un valor (todo menos `void`). */
-export type ValueType = Exclude<TypeName, 'void'>
-
 export type SymbolKind = 'variable' | 'constant' | 'parameter' | 'function'
 
 /** Dónde vive la variable en tiempo de ejecución. */
@@ -32,11 +30,13 @@ interface BaseSymbol {
   scope: Scope
   /** ¿Se puede reasignar? (`let` y parámetros sí; `const` y funciones no). */
   mutable: boolean
-  loc?: SourceLocation
+  /** Posición de la declaración en el código fuente. */
+  position?: SourcePosition
 }
 
 export interface VariableSymbol extends BaseSymbol {
   kind: 'variable' | 'constant' | 'parameter'
+  /** Tipo del valor. En arreglos, la variable guarda una REFERENCIA al Heap. */
   type: ValueType
   storage: StorageClass
   /** Nombre único usado en el IR (ver comentario del módulo). */
@@ -51,7 +51,7 @@ export interface ParameterInfo {
 export interface FunctionSymbol extends BaseSymbol {
   kind: 'function'
   params: ParameterInfo[]
-  returnType: TypeName
+  returnType: ReturnType
   mutable: false
 }
 
@@ -102,7 +102,7 @@ export class SymbolTable {
     name: string,
     kind: VariableSymbol['kind'],
     type: ValueType,
-    loc?: SourceLocation,
+    position?: SourcePosition,
   ): DeclareResult<VariableSymbol> {
     const existing = this.currentScope.lookupLocal(name)
     if (existing) return { ok: false, existing }
@@ -117,7 +117,7 @@ export class SymbolTable {
       mutable: kind !== 'constant',
       storage: area === this.global ? 'global' : 'local',
       irName: this.uniqueIrName(area, name),
-      loc,
+      position,
     }
     this.currentScope.declare(symbol)
     return { ok: true, symbol }
@@ -126,8 +126,8 @@ export class SymbolTable {
   declareFunction(
     name: string,
     params: ParameterInfo[],
-    returnType: TypeName,
-    loc?: SourceLocation,
+    returnType: ReturnType,
+    position?: SourcePosition,
   ): DeclareResult<FunctionSymbol> {
     const existing = this.currentScope.lookupLocal(name)
     if (existing) return { ok: false, existing }
@@ -140,7 +140,7 @@ export class SymbolTable {
       returnType,
       scope: this.currentScope,
       mutable: false,
-      loc,
+      position,
     }
     this.currentScope.declare(symbol)
     return { ok: true, symbol }
@@ -176,8 +176,8 @@ export class SymbolTable {
       for (const s of scope.symbols.values()) {
         const detail =
           s.kind === 'function'
-            ? `(${s.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${s.returnType}`
-            : `: ${s.type} [${s.storage} ${s.irName}${s.mutable ? '' : ', inmutable'}]`
+            ? `(${s.params.map((p) => `${p.name}: ${formatType(p.type)}`).join(', ')}): ${formatType(s.returnType)}`
+            : `: ${formatType(s.type)} [${s.storage} ${s.irName}${s.mutable ? '' : ', inmutable'}]`
         lines.push(`${indent}  ${s.kind} ${s.name}${detail}`)
       }
       scope.children.forEach(visit)
