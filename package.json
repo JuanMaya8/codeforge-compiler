@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "frontend:demo": "node scripts/frontend-demo.ts"
   },
   "dependencies": {
     "react": "^19.3.1",
