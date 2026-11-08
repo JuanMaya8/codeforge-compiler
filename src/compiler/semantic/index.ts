@@ -1,0 +1,5 @@
+export * from './semantic-errors.ts'
+export * from './scope.ts'
+export * from './symbol-table.ts'
+export * from './types.ts'
+export * from './type-checker.ts'
