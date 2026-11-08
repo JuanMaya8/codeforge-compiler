@@ -2,96 +2,37 @@
 
 Actúa como ingeniero de software en `C:\Users\Acer\Desktop\codeforge-compiler`.
 Antes de editar, revisa `git status --short --branch`, `git branch -avv` y
-`git worktree list`. Conserva los cambios actuales y respeta los contratos de
-Jack y Deivid descritos aquí.
+`git worktree list`. Respeta el plan de `docs/PROMPTS_COORDINACION.md`.
 
-## Objetivo
+## Estado (2026-11-08)
 
-Dejar CodeForge listo para que el equipo termine la interfaz y acuerde el
-soporte de arreglos, con un camino reproducible para compilar y ejecutar
-programas. El Runtime implementa IR v1.0; `runSource()` prueba el pipeline para
-el subconjunto que los contratos AST actuales pueden representar.
+- Contratos unificados: AST canónico de Jack (`src/compiler/ast/nodes.ts`),
+  `CompilerDiagnostic` común (`src/compiler/errors.ts`), IR v2.0 de Deivid con
+  `ARRAY_ALLOC/LOAD/STORE` y posiciones de origen.
+- Runtime (JuanMaya8) en `feature/runtime`: VM v2.0, Heap tipado, errores como
+  `CompilerDiagnostic` con PC/opcode/posición y `runSource()` encadenando
+  frontend → semántica/IR → VM. El adaptador temporal de AST se eliminó.
+- CI: `.github/workflows/ci.yml` (npm ci, test, lint, build y demo).
+- `develop` no tiene protección de rama ni rulesets en GitHub; el equipo acordó
+  integrar solo mediante PR revisado.
 
-## Ramas y GitHub
+## Orden de integración en `develop`
 
-- Rama activa local: `feature/runtime`, HEAD `bccc83f` antes de publicar el
-  plan por responsable.
-- `feature/runtime` se publicó en `origin/feature/runtime`; commit `05fce50`
-  (`feat(runtime): implement IR execution and integration tooling`), y sus
-  documentos se actualizaron en `bccc83f`; autor Git
-  `JuanMaya8 <juanmaya@campusucc.edu.co>`.
-- `develop` local: `b7f0c2a`; integra localmente lexer/parser y semantic/IR.
-- `origin/develop`: `f8404df`; no se ha hecho push.
-- Ramas remotas vistas: `origin/develop`, `origin/feature/lexer-parser`,
-  `origin/feature/semantic-ir`.
-- PR #1 de Jack (`feature/lexer-parser` → `develop`) estaba abierto y
-  mergeable/clean, pero GitHub devolvía estado `pending` con cero
-  checks/statuses y cero reviews. La API de protección de `develop` respondió
-  Unauthorized. No fuerces merge remoto ni publiques cambios mientras no se
-  confirme política y revisión de contratos.
-- `feature/semantic-ir` no tiene PR.
-- El worktree y la referencia locales temporales `integration-review` ya se
-  eliminaron. `develop` y `feature/runtime` conservan los commits integrados.
-- El usuario autorizó publicar los cambios actuales en su nombre; ese push ya
-  se realizó. Publica futuras actualizaciones de documentación en la rama de
-  Runtime cuando el usuario las solicite; no hagas merges remotos automáticos.
+1. PR #1 `feature/lexer-parser` (Jack).
+2. PR `feature/semantic-ir` (Deivid).
+3. PR `feature/runtime` (Juan); tras los dos anteriores su diff queda solo en
+   Runtime, servicio, demo, CI y documentación.
+4. `feature/ui` (Jack) desde el `develop` actualizado, consumiendo solo
+   `runSource()`.
 
-## Contratos y límite de integración
+## Verificación de referencia (feature/runtime, Node 22.14)
 
-- Jack: `parseSource()` devuelve el AST de `src/compiler/ast/nodes.ts`, con
-  nodos `VariableDeclaration`, `BlockStatement`, `AssignmentExpression`,
-  `ArrayExpression` e `IndexExpression`.
-- Deivid: `compileToIR()` consume el AST diferente de
-  `src/compiler/semantic/ast-contract.ts`: `VarDeclaration`, `Block`,
-  `AssignmentStatement`; `TypeName` solo cubre tipos escalares. IR v1.0 está
-  definido en `src/compiler/ir/instructions.ts`.
-- `src/compiler/integration/ast-adapter.ts` traduce las estructuras
-  compatibles sin editar lexer/parser/ast/semantic/ir. Reporta arreglos,
-  indexación y asignaciones dentro de expresiones como errores de integración;
-  no los simules.
-- `src/compiler/run-source.ts` encadena `parseSource` → adaptador →
-  `compileToIR` → VM y devuelve la etapa que falló.
-- La VM recibe IR, no texto ni fuente. Heap es estructura educativa; IR v1.0 no
-  tiene opcodes de memoria dinámica o arreglos.
-
-## Cambios listos en el workspace
-
-- Runtime en `src/compiler/runtime/`: VM, Stack, Heap, errores y pruebas.
-- Servicio de integración en `src/compiler/integration/` y
-  `src/compiler/run-source.ts`; exports en `src/compiler/index.ts`.
-- Demo ejecutable `examples/runtime-demo.cf` mediante
-  `npm run compiler:run -- examples/runtime-demo.cf`.
-- README raíz y `src/compiler/README.md` explican fases, comandos y límites.
-- `frontend:demo` corre con Node type stripping. Entorno probado: Node 22.14;
-  Vitest requiere Node 22.12+ dentro de sus versiones soportadas.
-
-## Verificación limpia
-
-Ejecutada después de `npm ci` en Node 22.14:
-
-- `npm test`: **9 archivos, 140 tests aprobados**. La cuenta previa de 266 era
-  por duplicados dentro del worktree temporal anidado, ya eliminado.
-- `npm run build`: pasó.
-- `npm run lint`: pasó.
-- `npm run compiler:run -- examples/runtime-demo.cf`: pasó; salida `0`, `1`,
-  `2`, `120`.
-- `npm run frontend:demo -- examples/demo.cf`: pasó; Node muestra el warning
-  esperado porque `--experimental-strip-types` aún es experimental.
-
-Repite esas comprobaciones tras modificar TypeScript o scripts.
-
-## Pendientes del equipo
-
-1. Jack y Deivid deben acordar si los arreglos e indexación se implementan de
-   punta a punta (AST semántico, tipos, IR y Heap) o se excluyen del lenguaje
-   inicial. No editar sus carpetas sin coordinación.
-2. Revisar los contratos de AST y errores explicados en
-   `docs/INFORME_INTEGRACION_JACK.md` y
-   `docs/REVISION_CONTRATOS_INTEGRACION.md` antes del merge remoto.
-3. La UI React todavía es la plantilla Vite y no invoca `runSource()`; integrarla
-   cuando se acuerde el diseño.
-4. Revisar PR #1 y la protección/checks actuales antes de cualquier merge
-   remoto. El remoto no ha recibido los merges locales.
+- `npm ci`, `npm run lint`, `npm run build`: pasan.
+- `npm test`: 11 archivos, 191 tests.
+- `npm run compiler:run -- examples/runtime-demo.cf`: salida `120`, `100`,
+  `118`, `32` y estado `completed`.
+- `npm audit`: 0 vulnerabilidades de producción; 10 moderadas en ESLint
+  (`minimatch`, solo desarrollo) cuya única corrección es un cambio mayor.
 
 ## Comandos para empezar
 

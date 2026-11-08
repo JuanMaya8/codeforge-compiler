@@ -1,5 +1,10 @@
 # Revisión de contratos de integración
 
+> **Documento histórico (IR v1.0).** Las incompatibilidades descritas aquí ya se
+> resolvieron: semántica e IR consumen el AST canónico, el IR es v2.0 con
+> arreglos y `integration/ast-adapter.ts` se eliminó. Ver
+> `src/compiler/README.md` y `src/compiler/runtime/README.md`.
+
 **Alcance:** lectura de `docs/INFORME_INTEGRACION_JACK.md`, el AST del parser,
 `src/compiler/semantic/ast-contract.ts`, `src/compiler/ir/instructions.ts` y el
 Runtime. No se modificaron los módulos de Jack o Deivid.
