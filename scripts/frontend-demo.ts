@@ -4,7 +4,7 @@
  *   npm run frontend:demo -- examples/demo.cf
  *   npm run frontend:demo -- examples/errores-sintacticos.cf
  *
- * Requires Node.js 22.18+ (runs TypeScript directly).
+ * Requires Node.js 22.6+ with built-in TypeScript type stripping.
  */
 import { readFileSync } from 'node:fs';
 import { formatDiagnostic, parseSource, printAst } from '../src/compiler/frontend.ts';

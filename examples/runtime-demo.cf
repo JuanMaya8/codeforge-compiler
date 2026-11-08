@@ -1,0 +1,40 @@
+// Demo del Runtime con IR v2.0: recursión, arreglos 1D/anidados y aliasing.
+
+// Recursión: cada llamada tiene su propio frame en el Stack.
+function factorial(n: int) -> int {
+  if (n <= 1) {
+    return 1;
+  }
+  return n * factorial(n - 1);
+}
+
+// Los arreglos se pasan por referencia: la función modifica el mismo bloque del Heap.
+function duplicar(xs: int[], n: int) -> int[] {
+  let i: int = 0;
+  while (i < n) {
+    xs[i] = xs[i] * 2;
+    i = i + 1;
+  }
+  return xs;
+}
+
+// Suma recursiva de un arreglo.
+function sumar(xs: int[], i: int, n: int) -> int {
+  if (i >= n) {
+    return 0;
+  }
+  return xs[i] + sumar(xs, i + 1, n);
+}
+
+print(factorial(5));
+
+let numeros: int[] = [1, 2, 3, 4];
+let alias: int[] = duplicar(numeros, 4);
+alias[0] = 100;
+print(numeros[0]);
+print(sumar(numeros, 0, 4));
+
+let matriz: int[][] = [[1, 2], [3, 4]];
+let fila: int[] = matriz[1];
+fila[0] = 30;
+print(matriz[1][0] + matriz[0][1]);

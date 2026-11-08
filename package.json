@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "frontend:demo": "node scripts/frontend-demo.ts"
+    "frontend:demo": "node --experimental-strip-types scripts/frontend-demo.ts",
+    "compiler:run": "node scripts/compiler-run.mjs"
   },
   "dependencies": {
     "react": "^19.3.1",
