@@ -2,11 +2,11 @@
 
 La implementación está separada de React. Este módulo contiene el flujo de
 compilación y ofrece `runSource()` como API de servicio para pruebas y para la
-futura interfaz.
+interfaz.
 
 ```text
-source → frontend.ts → AST frontend → integration/ast-adapter.ts
-       → semantic + IR → runtime/VirtualMachine → resultado estructurado
+source → frontend.ts (Lexer + Parser) → AST canónico (ast/nodes.ts)
+       → semantic + IR v2.0 → runtime/VirtualMachine → resultado estructurado
 ```
 
 ## Fases
@@ -14,25 +14,35 @@ source → frontend.ts → AST frontend → integration/ast-adapter.ts
 | Ruta | Responsabilidad | Entrada → salida |
 | --- | --- | --- |
 | `lexer/`, `tokens.ts` | Tokens y errores léxicos | fuente → tokens |
-| `parser/`, `ast/` | Descenso recursivo y AST del frontend | tokens → AST |
-| `semantic/` | Scopes, símbolos y tipos | AST semántico → diagnósticos y anotaciones |
-| `ir/` | Contrato tipado v1.0 y generador | AST semántico → `IRProgram` |
-| `runtime/` | Ejecución de instrucciones, memoria y errores | `IRProgram` → `ExecutionResult` |
-| `integration/` | Adaptador entre los dos contratos de AST | AST frontend → AST semántico |
-| `run-source.ts` | Orquestación sin dependencias de React | fuente → etapa, IR y/o ejecución |
+| `parser/`, `ast/` | Descenso recursivo y AST canónico | tokens → AST |
+| `semantic/` | Scopes, símbolos y tipos (incluye arreglos) | AST → diagnósticos y anotaciones |
+| `ir/` | Contrato tipado v2.0 y generador | AST → `IRProgram` |
+| `runtime/` | VM, Stack, Heap y errores de ejecución | `IRProgram` → `ExecutionResult` |
+| `errors.ts` | `CompilerDiagnostic` común a todas las fases | — |
+| `run-source.ts` | Orquestación sin dependencias de React | fuente → `SourceRunResult` |
+
+## Servicio `runSource`
+
+```ts
+import { runSource } from './compiler';
+
+const result = runSource(code);
+result.ok          // true solo si todas las fases terminaron y el programa corrió completo
+result.stage       // 'lexical' | 'syntax' | 'semantic' | 'runtime' | 'completed'
+result.diagnostics // CompilerDiagnostic[] de la fase que falló
+result.tokens, result.ast, result.semantic, result.ir, result.execution
+```
+
+Se conservan los datos de todas las fases que se ejecutaron (`null` para las que
+no). `runSource` nunca lanza excepciones: un fallo inesperado se devuelve como
+diagnóstico `INTERNAL_ERROR` de la fase en curso. La UI debe usar solo este
+servicio, no partes internas de la VM.
 
 ## Ejecución
 
 - `parseSource(source)` ejecuta solo Lexer y Parser.
 - `compileToIR(program)` ejecuta análisis semántico y genera IR si no hay errores.
-- `new VirtualMachine().execute(irProgram)` ejecuta directamente IR v1.0.
-- `runSource(source)` encadena las fases disponibles y entrega errores de la
-  fase que falló sin lanzar errores de runtime al consumidor.
-
-`runSource()` solo traduce el subconjunto representable por el AST semántico
-actual. El parser acepta arreglos e indexación, pero el contrato semántico/IR no
-los modela aún; en esos casos el adaptador devuelve un diagnóstico de
-integración.
+- `new VirtualMachine().execute(irProgram)` ejecuta IR v2.0 (ver `runtime/README.md`).
 
 Las pruebas se ejecutan con `npm test`; ejemplos: `npm run frontend:demo --
 examples/demo.cf` y `npm run compiler:run -- examples/runtime-demo.cf`.

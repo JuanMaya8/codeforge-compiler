@@ -1,56 +1,86 @@
-import type { HeapReference, RuntimeValue } from './stack';
+import { defaultValue, type IRType } from '../ir/instructions';
 import { RuntimeError } from './runtime-errors';
+import { copyValue, type HeapReference, type RuntimeValue } from './stack';
 
+/** Plain copy of a Heap block for the UI and tests. */
 export interface HeapBlock {
   readonly address: number;
+  readonly elementType: IRType;
   readonly values: RuntimeValue[];
 }
 
-/** Simple non-moving heap. Blocks remain allocated until the Heap instance is discarded. */
+interface StoredBlock {
+  readonly elementType: IRType;
+  readonly values: RuntimeValue[];
+}
+
+/**
+ * Simple non-moving heap of typed blocks (one block per array).
+ * Addresses start at 1 and are never reused; there is no GC or free, so a
+ * reference stays valid for the lifetime of the Heap instance.
+ */
 export class RuntimeHeap {
-  private readonly blocks = new Map<number, RuntimeValue[]>();
+  private readonly blocks = new Map<number, StoredBlock>();
   private nextAddress = 1;
 
-  allocate(size: number, initialValue: RuntimeValue = null): HeapReference {
-    if (!Number.isInteger(size) || size < 0) {
-      throw new RuntimeError(`Invalid allocation size: ${size}`, 'INVALID_REFERENCE');
+  /** Reserves `length` cells, each initialized with `defaultValue(elementType)`. */
+  allocate(elementType: IRType, length: number): HeapReference {
+    if (!Number.isInteger(length) || length < 0) {
+      throw new RuntimeError(`Tamaño de arreglo inválido: ${String(length)}.`, 'INVALID_PROGRAM');
     }
     const address = this.nextAddress++;
-    this.blocks.set(address, Array.from({ length: size }, () => initialValue));
+    const initial = defaultValue(elementType);
+    this.blocks.set(address, { elementType, values: Array.from({ length }, () => initial) });
     return { address };
   }
 
+  has(reference: HeapReference): boolean {
+    return this.blocks.has(reference.address);
+  }
+
+  elementType(reference: HeapReference): IRType {
+    return this.getBlock(reference).elementType;
+  }
+
+  length(reference: HeapReference): number {
+    return this.getBlock(reference).values.length;
+  }
+
   read(reference: HeapReference, index: number): RuntimeValue {
-    return this.getCell(reference, index);
+    const block = this.getBlock(reference);
+    checkIndex(index, block.values.length);
+    return copyValue(block.values[index]);
   }
 
   write(reference: HeapReference, index: number, value: RuntimeValue): void {
     const block = this.getBlock(reference);
-    this.checkIndex(index, block.length);
-    block[index] = value;
+    checkIndex(index, block.values.length);
+    block.values[index] = copyValue(value);
   }
 
   snapshot(): HeapBlock[] {
-    return [...this.blocks].map(([address, values]) => ({ address, values: [...values] }));
+    return [...this.blocks].map(([address, block]) => ({
+      address,
+      elementType: block.elementType,
+      values: block.values.map(copyValue),
+    }));
   }
 
-  private getCell(reference: HeapReference, index: number): RuntimeValue {
-    const block = this.getBlock(reference);
-    this.checkIndex(index, block.length);
-    return block[index];
-  }
-
-  private getBlock(reference: HeapReference): RuntimeValue[] {
+  private getBlock(reference: HeapReference): StoredBlock {
     const block = this.blocks.get(reference.address);
     if (!block) {
-      throw new RuntimeError(`Unknown heap reference at address ${reference.address}`, 'INVALID_REFERENCE');
+      throw new RuntimeError(`La referencia @${reference.address} no apunta a ningún bloque del Heap.`, 'INVALID_REFERENCE');
     }
     return block;
   }
+}
 
-  private checkIndex(index: number, length: number): void {
-    if (!Number.isInteger(index) || index < 0 || index >= length) {
-      throw new RuntimeError(`Heap index ${index} is outside block bounds (length ${length})`, 'HEAP_OUT_OF_BOUNDS');
-    }
+function checkIndex(index: number, length: number): void {
+  if (!Number.isInteger(index) || index < 0 || index >= length) {
+    const valid = length === 0 ? 'el arreglo está vacío' : `índices válidos 0..${length - 1}`;
+    throw new RuntimeError(
+      `Índice ${String(index)} fuera de rango: el arreglo tiene ${length} elemento(s) (${valid}).`,
+      'HEAP_OUT_OF_BOUNDS',
+    );
   }
 }

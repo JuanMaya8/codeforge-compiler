@@ -1,8 +1,8 @@
 export { RuntimeHeap } from './heap';
 export type { HeapBlock } from './heap';
-export { RuntimeError } from './runtime-errors';
-export type { RuntimeErrorCode } from './runtime-errors';
-export { RuntimeStack } from './stack';
-export type { HeapReference, RuntimeValue, StackFrame } from './stack';
-export { VirtualMachine } from './virtual-machine';
-export type { ExecutionResult, RuntimeErrorInfo, VirtualMachineOptions } from './virtual-machine';
+export { RuntimeError, RuntimeErrorCode } from './runtime-errors';
+export type { RuntimeErrorLocation } from './runtime-errors';
+export { isHeapReference, RuntimeStack } from './stack';
+export type { HeapReference, RuntimeValue, StackFrame, StackFrameSnapshot } from './stack';
+export { DEFAULT_MAX_STEPS, MAIN_FRAME, VirtualMachine } from './virtual-machine';
+export type { ExecutionResult, VirtualMachineOptions } from './virtual-machine';

@@ -1,8 +1,9 @@
 # CodeForge Runtime
 
-The runtime is independent of React and accepts the typed `IRProgram` v1.0 from
-[`../ir/instructions.ts`](../ir/instructions.ts). It does not parse source code,
-IR text, or instruction strings.
+The runtime is independent of React and executes the typed `IRProgram` **v2.0**
+defined in [`../ir/instructions.ts`](../ir/instructions.ts) (explained in
+[`../ir/README.md`](../ir/README.md)). It does not parse source code or IR text.
+Any other IR version is rejected with `INVALID_PROGRAM`.
 
 ## API
 
@@ -14,64 +15,77 @@ const program: IRProgram = {
   version: IR_VERSION,
   globals: [],
   functions: [],
-  main: [
-    { op: 'PRINT', value: { kind: 'const', type: 'string', value: 'Hola' } },
-  ],
+  main: [{ op: 'PRINT', value: { kind: 'const', type: 'string', value: 'Hola' } }],
 };
 
 const result = new VirtualMachine().execute(program, { maxSteps: 100_000 });
-// result.status === 'completed'; result.output is ['Hola']
+// result.status === 'completed'; result.output → ['Hola']
 ```
 
-Each call to `execute` creates fresh globals, Stack, Heap and output. The
-structured result contains `status`, printed lines, step count, current/last PC,
-last instruction, an optional runtime error, Stack and Heap snapshots, and final
-global values. Runtime errors are returned with `status: 'failed'`; they do not
-escape as uncaught exceptions into the caller.
+The UI should not call the VM directly: it uses `runSource(source)` from
+`src/compiler`, which runs every phase and returns the same `ExecutionResult`
+in `result.execution`.
+
+`execute` never throws. Each call starts with fresh globals, Stack, Heap and
+output and returns an `ExecutionResult`:
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `'completed'` or `'failed'` |
+| `output` | Lines printed by `PRINT` |
+| `steps` | Executed instructions |
+| `pc`, `functionName`, `instruction` | Last executed (or failing) instruction and the body it belongs to |
+| `error`, `diagnostics` | `CompilerDiagnostic` with `phase: 'runtime'`, stable `code`, `message`, `pc`, `instruction` (opcode) and `position` (source line/column) when the instruction has one |
+| `stack` | `StackFrameSnapshot[]` from `<main>` to the innermost call (empty after completion) |
+| `heap` | `HeapBlock[]`: `{ address, elementType, values }` |
+| `globals` | Final global values |
+
+Values are primitives, `null` (the null array reference) or `{ address }`
+references to Heap blocks. Snapshots are plain copies, safe to serialize.
+
+## Runtime error codes
+
+`INVALID_PROGRAM`, `UNKNOWN_INSTRUCTION`, `UNDEFINED_VARIABLE`, `TYPE_ERROR`,
+`DIVISION_BY_ZERO`, `INVALID_JUMP`, `INVALID_FUNCTION`, `HEAP_OUT_OF_BOUNDS`,
+`INVALID_REFERENCE`, `STEP_LIMIT`, `INTERNAL_ERROR` (exported as
+`RuntimeErrorCode`).
 
 ## PC and instruction cycle
 
 Every activation frame owns its instruction body, label index and PC. The VM
-reads the instruction at the current PC, increments the PC, and executes it.
-`JUMP` and conditional jumps replace the current frame's PC with the target
-label's index. Labels are indexed once per frame, so a jump cannot cross from
-`main` into a function or between functions. Execution stops when the main body
-ends, a runtime error occurs, or `maxSteps` is reached.
+reads the instruction at the frame's PC, increments the PC and executes it.
+Jumps replace the current frame's PC with the label index of the same body, so
+a jump cannot cross between `main` and functions. Execution stops when `main`
+ends, an error occurs or `maxSteps` is reached (`STEP_LIMIT`). On failure the
+failing frame's snapshot shows the PC of the failing instruction.
 
-## Stack and function calls
+## Stack and calls
 
-`PARAM` reads a value and appends it to the current frame's pending argument
-list. `CALL` consumes the last `argCount` values, creates a new frame with
-parameters, default-initialized locals, an empty temporary map, its own body and
-PC zero. The caller frame stays on the Stack with its PC already advanced past
-the CALL and the return PC recorded in the callee. This keeps each recursive
-activation's temporaries and local variables separate.
+`PARAM` appends a value to the current frame's pending arguments. `CALL` takes
+the last `argCount`, checks them against the parameter types, and pushes a new
+frame with parameters, default-initialized locals and its own temporaries, so
+recursive activations never share state. `RETURN` checks the value against the
+return type, pops the frame and writes the value into the caller's `dest`
+temporary. Falling off a non-void function is `INVALID_FUNCTION`; `RETURN` in
+`main` is `INVALID_PROGRAM`.
 
-`RETURN` checks the function's return type, pops the callee, and writes a value
-to the caller's destination temporary when the CALL specified one. Falling off
-the end of a non-void function is a runtime error. A PC and instruction are
-attached to execution errors whenever they can be identified.
+Every write is checked against the destination's `IRType` (`int` must be an
+integer number; arrays must reference a live block with the same element type,
+or be `null`).
 
-Globals use one map shared by all functions. Locals and temporaries live in the
-current frame. Globals and declared function locals use the `defaultValue`
-specified by IR v1.0; temporaries must be written before they are read.
+## Heap and arrays
 
-## Heap
+`RuntimeHeap` stores typed blocks (`elementType` + cells) at stable addresses
+starting at 1. There is no GC or free: blocks live as long as the execution.
 
-`RuntimeHeap` is a small non-moving educational heap with stable numeric
-references and indexed blocks. Reads and writes validate the reference and
-bounds. Allocated blocks live for the lifetime of the Heap instance; there is no
-garbage collector or explicit free operation.
-
-IR v1.0 has no allocation, dereference or array opcodes, so the VM does not
-connect Heap blocks to program operands yet. Adding heap operations requires a
-versioned agreement with the IR owner; the current opcode set is implemented as
-defined in `instructions.ts`.
-
-## Supported contract
-
-The VM implements `ASSIGN`, `BINARY`, `UNARY`, `CAST`, `LABEL`, `JUMP`,
-`JUMP_IF_FALSE`, `JUMP_IF_TRUE`, `PARAM`, `CALL`, `RETURN` and `PRINT`.
-Integer division truncates toward zero, division/modulo by zero fail with a
-descriptive error, and boolean short-circuiting uses the generator's jump
-instructions. Operands remain typed objects throughout execution.
+- `ARRAY_ALLOC dest, elementType, length` reserves a block whose cells start at
+  `defaultValue(elementType)` (`null` for inner arrays) and writes its reference
+  to `dest`.
+- `ARRAY_LOAD dest, array, index` / `ARRAY_STORE array, index, value` validate,
+  in order: the operand is an array (`TYPE_ERROR`), it holds a live reference
+  (`INVALID_REFERENCE`, also for `null`), the index is an integer (`TYPE_ERROR`)
+  and `0 <= index < length` (`HEAP_OUT_OF_BOUNDS`). `ARRAY_STORE` also checks the
+  value against the block's element type.
+- `ASSIGN`, `PARAM` and `RETURN` copy the reference, never the elements, so
+  `b = a` makes both names alias the same block. Nested arrays are blocks whose
+  cells hold references to other blocks.
