@@ -201,21 +201,27 @@ describe('Parser: syntax errors', () => {
     expect(syntaxErrors('let x = 5\nprint(x);')).toEqual([
       {
         phase: 'syntax',
+        code: 'EXPECTED_TOKEN',
         message: "Se esperaba ';' al final de la declaración de variable, pero se encontró 'print'.",
-        line: 1,
-        column: 10,
+        position: { line: 1, column: 10 },
       },
     ]);
   });
 
   it('reports a missing expression', () => {
     expect(syntaxErrors('let x = ;')).toEqual([
-      { phase: 'syntax', message: "Se esperaba una expresión, pero se encontró ';'.", line: 1, column: 9 },
+      {
+        phase: 'syntax',
+        code: 'EXPECTED_EXPRESSION',
+        message: "Se esperaba una expresión, pero se encontró ';'.",
+        position: { line: 1, column: 9 },
+      },
     ]);
   });
 
   it('reports an unclosed block mentioning where it was opened', () => {
     const [error] = syntaxErrors('if (a) {\n  print(1);\n');
+    expect(error.code).toBe('EXPECTED_TOKEN');
     expect(error.message).toBe("Se esperaba '}' para cerrar el if abierto en la línea 1, pero se encontró el fin del archivo.");
   });
 
@@ -224,34 +230,48 @@ describe('Parser: syntax errors', () => {
   });
 
   it('reports invalid types and missing parameter types', () => {
-    expect(syntaxErrors('let x: number = 1;')[0].message).toContain('Se esperaba un tipo (int, float, string o bool)');
+    const [invalidType] = syntaxErrors('let x: number = 1;');
+    expect(invalidType.code).toBe('EXPECTED_TYPE');
+    expect(invalidType.message).toContain('Se esperaba un tipo (int, float, string o bool)');
     expect(syntaxErrors('function f(a) { }')[0].message).toContain("Se esperaba ':' y el tipo del parámetro 'a'");
   });
 
   it('reports const without value and let without type or value', () => {
-    expect(syntaxErrors('const X: int;')[0].message).toBe("La constante 'X' debe tener un valor inicial.");
-    expect(syntaxErrors('let y;')[0].message).toBe("La variable 'y' necesita un tipo (': int') o un valor inicial.");
+    expect(syntaxErrors('const X: int;')[0]).toMatchObject({
+      code: 'CONST_WITHOUT_INITIALIZER',
+      message: "La constante 'X' debe tener un valor inicial.",
+    });
+    expect(syntaxErrors('let y;')[0]).toMatchObject({
+      code: 'MISSING_TYPE_OR_INITIALIZER',
+      message: "La variable 'y' necesita un tipo (': int') o un valor inicial.",
+    });
   });
 
   it('reports invalid assignment targets', () => {
-    expect(syntaxErrors('5 = 3;')[0]).toMatchObject({ line: 1, column: 3 });
+    expect(syntaxErrors('5 = 3;')[0]).toMatchObject({
+      code: 'INVALID_ASSIGNMENT_TARGET',
+      position: { line: 1, column: 3 },
+    });
     expect(syntaxErrors('f() = 3;')[0].message).toContain('Destino de asignación no válido');
   });
 
   it('reports calls on something that is not a function name', () => {
-    expect(syntaxErrors('(a + b)(1);')[0].message).toBe('Solo se pueden llamar funciones usando su nombre.');
+    expect(syntaxErrors('(a + b)(1);')[0]).toMatchObject({
+      code: 'INVALID_CALLEE',
+      message: 'Solo se pueden llamar funciones usando su nombre.',
+    });
   });
 
   it('reports functions declared inside blocks', () => {
-    expect(syntaxErrors('if (a) { function g() { } }')[0].message).toContain(
-      'Las funciones solo pueden declararse en el nivel superior',
-    );
+    const [error] = syntaxErrors('if (a) { function g() { } }');
+    expect(error.code).toBe('NESTED_FUNCTION');
+    expect(error.message).toContain('Las funciones solo pueden declararse en el nivel superior');
   });
 
   it('recovers after an error and reports the following ones (panic mode)', () => {
     const source = 'let a = ;\nlet b: int = 2;\nprint(b\nlet c = 3 +;\n}';
     const { program, errors } = parseTokens(tokenize(source).tokens);
-    expect(errors.map((e) => e.line)).toEqual([1, 3, 4, 5]);
+    expect(errors.map((e) => e.position?.line)).toEqual([1, 3, 4, 5]);
     // The valid declaration between the errors is still in the AST.
     expect(program.body).toMatchObject([{ kind: 'VariableDeclaration', name: 'b' }]);
   });
@@ -259,7 +279,7 @@ describe('Parser: syntax errors', () => {
   it('skips the body of a broken header instead of reporting cascading errors', () => {
     const source = 'function add(a, b: int) -> int {\n  return a + b;\n}\nif (x > 3 { print(x); }\nprint(1);';
     const { program, errors } = parseTokens(tokenize(source).tokens);
-    expect(errors.map((e) => e.line)).toEqual([1, 4]);
+    expect(errors.map((e) => e.position?.line)).toEqual([1, 4]);
     expect(program.body).toMatchObject([{ kind: 'PrintStatement' }]);
   });
 

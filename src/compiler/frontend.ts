@@ -10,7 +10,7 @@
  *   else showErrors(result.errors);
  */
 import type { Program } from './ast/index.ts';
-import type { CompilerError } from './errors.ts';
+import type { CompilerDiagnostic } from './errors.ts';
 import { tokenize } from './lexer/index.ts';
 import { parseTokens } from './parser/index.ts';
 import type { Token } from './tokens.ts';
@@ -21,8 +21,8 @@ export interface FrontendResult {
   tokens: Token[];
   /** The AST, or `null` if the lexer failed (the parser is not run then). */
   program: Program | null;
-  /** Lexical errors, or syntax errors when the lexer succeeded. */
-  errors: CompilerError[];
+  /** Lexical diagnostics, or syntax diagnostics when the lexer succeeded. */
+  errors: CompilerDiagnostic[];
 }
 
 /**
@@ -48,9 +48,9 @@ export function parseSource(source: string): FrontendResult {
 
 export { tokenize, Lexer, type LexerResult } from './lexer/index.ts';
 export { parseTokens, Parser, type ParserResult } from './parser/index.ts';
-export { printAst, typeToString } from './ast/index.ts';
+export { AST_NODE_KINDS, printAst, typeToString } from './ast/index.ts';
 export type * from './ast/index.ts';
 export { TokenType, KEYWORDS, lookupKeyword } from './tokens.ts';
 export type { Token, SourcePosition, LiteralValue } from './tokens.ts';
-export { createError, formatError } from './errors.ts';
-export type { CompilerError, CompilerPhase } from './errors.ts';
+export { createDiagnostic, formatDiagnostic, LexicalErrorCode, SyntaxErrorCode } from './errors.ts';
+export type { CompilerDiagnostic, CompilerPhase } from './errors.ts';

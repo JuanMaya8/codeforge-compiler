@@ -1,228 +1,270 @@
 import { describe, expect, it } from 'vitest'
-import type { Program } from '../semantic/ast-contract'
-import { analyze } from '../semantic/type-checker'
-import {
-  assign,
-  bin,
-  block,
-  bool,
-  call,
-  cast,
-  constVar,
-  exprS,
-  float,
-  fn,
-  id,
-  ifS,
-  int,
-  letVar,
-  print,
-  program,
-  ret,
-  str,
-  un,
-  whileS,
-} from './ast-builders'
+import { check, codes } from './helpers.ts'
 
-const codes = (p: Program) => analyze(p).errors.map((e) => e.code)
-
-describe('Análisis semántico — programas válidos', () => {
-  it('acepta declaraciones con tipo explícito e inferido', () => {
-    const result = analyze(
-      program(
-        letVar('a', 'int', int(1)),
-        letVar('b', undefined, float(2.5)),
-        constVar('NOMBRE', 'string', str('Ana')),
-        letVar('ok', 'bool'),
-        print(id('NOMBRE')),
-      ),
-    )
-    expect(result.errors).toEqual([])
-    expect(result.symbolTable.lookup('b')).toMatchObject({ type: 'float' })
+describe('Semántico — declaraciones y scopes', () => {
+  it('acepta declaraciones con tipo explícito, inferido y sin valor inicial', () => {
+    expect(
+      codes(`
+        let a: int = 1;
+        let b = 2.5;
+        const NOMBRE: string = "Ana";
+        let ok: bool;
+        print(NOMBRE);
+      `),
+    ).toEqual([])
   })
 
-  it('acepta scopes anidados con shadowing', () => {
-    const p = program(
-      letVar('x', 'int', int(1)),
-      block(letVar('x', 'string', str('interno')), print(id('x')), block(letVar('x', 'bool', bool(true)))),
-      print(id('x')),
-    )
-    expect(codes(p)).toEqual([])
+  it('infiere el tipo desde el inicializador', () => {
+    const { symbolTable } = check('let x = 1 + 2.5; let s = "a"; let m = [[1], [2]];')
+    expect(symbolTable.lookup('x')).toMatchObject({ type: 'float' })
+    expect(symbolTable.lookup('s')).toMatchObject({ type: 'string' })
+    expect(symbolTable.lookup('m')).toMatchObject({
+      type: { kind: 'array', elementType: { kind: 'array', elementType: 'int' } },
+    })
   })
 
-  it('permite int → float implícito pero no al revés', () => {
-    expect(codes(program(letVar('f', 'float', int(3))))).toEqual([])
-    expect(codes(program(letVar('i', 'int', float(3.5))))).toEqual(['TYPE_MISMATCH'])
+  it('detecta variables no declaradas y reporta la posición del uso', () => {
+    const { errors } = check('let a: int = 1;\nprint(b);')
+    expect(errors).toEqual([
+      {
+        phase: 'semantic',
+        code: 'UNDECLARED_IDENTIFIER',
+        message: "La variable 'b' no ha sido declarada",
+        position: { line: 2, column: 7 },
+      },
+    ])
   })
 
-  it('acepta funciones, recursión y llamadas antes de la declaración (hoisting)', () => {
-    const p = program(
-      print(call('fact', int(5))),
-      fn('fact', [['n', 'int']], 'int', [
-        ifS(bin('<=', id('n'), int(1)), [ret(int(1))]),
-        ret(bin('*', id('n'), call('fact', bin('-', id('n'), int(1))))),
-      ]),
-    )
-    expect(codes(p)).toEqual([])
+  it('detecta declaraciones duplicadas en el mismo scope', () => {
+    expect(codes('let x: int = 1; let x: float = 2.0;')).toEqual(['DUPLICATE_DECLARATION'])
   })
 
-  it('acepta funciones void sin return y return vacío', () => {
-    const p = program(
-      fn('saluda', [['n', 'string']], 'void', [print(bin('+', str('Hola '), id('n')))]),
-      fn('nada', [], 'void', [ret()]),
-      exprS(call('saluda', str('Ana'))),
-    )
-    expect(codes(p)).toEqual([])
+  it('permite el mismo nombre en un scope anidado (shadowing)', () => {
+    expect(codes('let x: int = 1; { let x: string = "a"; print(x); } print(x);')).toEqual([])
   })
 
-  it('acepta un if/else donde ambas ramas retornan', () => {
-    const p = program(
-      fn('max', [['a', 'int'], ['b', 'int']], 'int', [
-        ifS(bin('>', id('a'), id('b')), [ret(id('a'))], [ret(id('b'))]),
-      ]),
-    )
-    expect(codes(p)).toEqual([])
+  it('las variables de un bloque no son visibles fuera de él', () => {
+    expect(codes('if (true) { let y: int = 1; } print(y);')).toEqual(['UNDECLARED_IDENTIFIER'])
   })
 
-  it('acepta expresiones lógicas, comparaciones y conversiones explícitas', () => {
-    const p = program(
-      letVar('a', 'int', int(3)),
-      letVar('b', 'bool', bin('&&', bin('<', id('a'), float(4.5)), un('!', bool(false)))),
-      letVar('s', 'string', bin('+', str('a='), cast('string', id('a')))),
-      letVar('i', 'int', cast('int', float(9.9))),
-      whileS(bin('!=', id('s'), str('')), [assign('s', str(''))]),
-    )
-    expect(codes(p)).toEqual([])
+  it('en `let x = x + 1;` el inicializador no ve la variable que se declara', () => {
+    expect(codes('let x = x + 1;')).toEqual(['UNDECLARED_IDENTIFIER'])
+  })
+
+  it('no reporta errores en cascada para una variable de tipo desconocido', () => {
+    expect(codes('let a = b; print(a + 1);')).toEqual(['UNDECLARED_IDENTIFIER'])
   })
 })
 
-describe('Análisis semántico — errores', () => {
-  it('variable no declarada', () => {
-    expect(codes(program(print(id('fantasma'))))).toEqual(['UNDECLARED_IDENTIFIER'])
-    expect(codes(program(assign('y', int(1))))).toEqual(['UNDECLARED_IDENTIFIER'])
+describe('Semántico — constantes y asignaciones', () => {
+  it('impide reasignar constantes', () => {
+    expect(codes('const PI: float = 3.14; PI = 3.0;')).toEqual(['CONST_REASSIGNMENT'])
   })
 
-  it('variable fuera de su scope', () => {
-    expect(codes(program(block(letVar('x', 'int', int(1))), print(id('x'))))).toEqual([
+  it('const protege la referencia del arreglo, no sus elementos', () => {
+    expect(codes('const A: int[] = [1, 2]; A[0] = 5;')).toEqual([])
+    expect(codes('const A: int[] = [1, 2]; A = [3];')).toEqual(['CONST_REASSIGNMENT'])
+  })
+
+  it('verifica el tipo en declaraciones y asignaciones', () => {
+    expect(codes('let x: int = "hola";')).toEqual(['TYPE_MISMATCH'])
+    expect(codes('let x: int = 1; x = true;')).toEqual(['TYPE_MISMATCH'])
+    expect(codes('let x: int = 2.5;')).toEqual(['TYPE_MISMATCH'])
+  })
+
+  it('permite la conversión implícita int → float, pero no al revés', () => {
+    expect(codes('let f: float = 1; f = 2;')).toEqual([])
+  })
+
+  it('no permite asignar a una función', () => {
+    expect(codes('function f() { } f = 1;')).toEqual(['INVALID_ASSIGNMENT'])
+  })
+
+  it('la asignación es una expresión con el tipo del destino (a = b = 1)', () => {
+    expect(codes('let a: int; let b: int; a = b = 1;')).toEqual([])
+    expect(codes('let a: string; let b: int; a = b = 1;')).toEqual(['TYPE_MISMATCH'])
+  })
+})
+
+describe('Semántico — funciones y return', () => {
+  it('acepta funciones con parámetros, recursión y llamadas antes de la declaración', () => {
+    expect(
+      codes(`
+        print(factorial(5));
+        function factorial(n: int) -> int {
+          if (n <= 1) { return 1; }
+          return n * factorial(n - 1);
+        }
+      `),
+    ).toEqual([])
+  })
+
+  it('detecta funciones inexistentes y llamadas a algo que no es función', () => {
+    expect(codes('noExiste(1);')).toEqual(['UNDEFINED_FUNCTION'])
+    expect(codes('let x: int = 1; x();')).toEqual(['NOT_A_FUNCTION'])
+  })
+
+  it('detecta un número incorrecto de argumentos', () => {
+    expect(codes('function f(a: int, b: int) -> int { return a + b; } print(f(1));')).toEqual([
+      'ARGUMENT_COUNT_MISMATCH',
+    ])
+  })
+
+  it('verifica el tipo de cada argumento', () => {
+    expect(codes('function f(a: int) { } f("x");')).toEqual(['TYPE_MISMATCH'])
+    expect(codes('function f(a: float) { } f(1);')).toEqual([])
+  })
+
+  it('los parámetros comparten scope con el cuerpo de la función', () => {
+    expect(codes('function f(a: int) { let a: int = 2; }')).toEqual(['DUPLICATE_DECLARATION'])
+    expect(codes('function f(a: int, a: int) { }')).toEqual(['DUPLICATE_DECLARATION'])
+  })
+
+  it('detecta funciones duplicadas y el choque con una variable global', () => {
+    expect(codes('function f() { } function f() { }')).toEqual(['DUPLICATE_DECLARATION'])
+    expect(codes('let f: int = 1; function f() { }')).toEqual(['DUPLICATE_DECLARATION'])
+  })
+
+  it('usar una función como valor es un error', () => {
+    expect(codes('function f() -> int { return 1; } let x = f;')).toEqual(['FUNCTION_AS_VALUE'])
+  })
+
+  it('una función sin tipo de retorno (void) no produce un valor', () => {
+    expect(codes('function f() { } let x = f();')).toEqual(['VOID_VALUE'])
+    expect(codes('function f() { } f();')).toEqual([])
+  })
+
+  it('return fuera de función', () => {
+    expect(codes('return 1;')).toEqual(['RETURN_OUTSIDE_FUNCTION'])
+  })
+
+  it('return con tipo incorrecto, sin valor o con valor en función void', () => {
+    expect(codes('function f() -> int { return "x"; }')).toEqual(['RETURN_TYPE_MISMATCH'])
+    expect(codes('function f() -> int { return; }')).toEqual(['RETURN_TYPE_MISMATCH'])
+    expect(codes('function f() { return 1; }')).toEqual(['RETURN_TYPE_MISMATCH'])
+    expect(codes('function f() -> float { return 1; }')).toEqual([])
+  })
+
+  it('exige return en todos los caminos de una función con tipo de retorno', () => {
+    expect(codes('function f(x: int) -> int { if (x > 0) { return 1; } }')).toEqual(['MISSING_RETURN'])
+    expect(codes('function f(x: int) -> int { while (true) { return 1; } }')).toEqual(['MISSING_RETURN'])
+    expect(
+      codes('function f(x: int) -> int { if (x > 0) { return 1; } else if (x < 0) { return -1; } else { return 0; } }'),
+    ).toEqual([])
+  })
+})
+
+describe('Semántico — expresiones y condiciones', () => {
+  it('aritmética numérica, concatenación, comparación y lógica válidas', () => {
+    expect(
+      codes(`
+        let a: int = 1 + 2 * 3 % 2;
+        let b: float = a / 2.0;
+        let s: string = "a" + "b";
+        let c: bool = a < b && s == "ab" || !(a != 1);
+        let n: int = -a;
+      `),
+    ).toEqual([])
+  })
+
+  it('detecta operaciones entre tipos incompatibles', () => {
+    expect(codes('let x = 1 + "a";')).toEqual(['INVALID_OPERAND_TYPES'])
+    expect(codes('let x = true + 1;')).toEqual(['INVALID_OPERAND_TYPES'])
+    expect(codes('let x = 2.5 % 2;')).toEqual(['INVALID_OPERAND_TYPES'])
+    expect(codes('let x = 1 && true;')).toEqual(['INVALID_OPERAND_TYPES'])
+    expect(codes('let x = "a" < "b";')).toEqual(['INVALID_OPERAND_TYPES'])
+    expect(codes('let x = -true;')).toEqual(['INVALID_OPERAND_TYPES'])
+    expect(codes('let x = !1;')).toEqual(['INVALID_OPERAND_TYPES'])
+    expect(codes('let x = 1 == "1";')).toEqual(['INVALID_OPERAND_TYPES'])
+  })
+
+  it('las condiciones de if y while deben ser bool (no hay truthiness)', () => {
+    expect(codes('if (1) { }')).toEqual(['INVALID_CONDITION'])
+    expect(codes('while ("x") { }')).toEqual(['INVALID_CONDITION'])
+    expect(codes('let i: int = 0; while (i < 3) { i = i + 1; }')).toEqual([])
+  })
+
+  it('acumula varios errores sin detenerse en el primero', () => {
+    expect(codes('print(a); let b: int = "x"; if (1) { }')).toEqual([
       'UNDECLARED_IDENTIFIER',
+      'TYPE_MISMATCH',
+      'INVALID_CONDITION',
     ])
   })
+})
 
-  it('declaración duplicada en el mismo scope (incluye parámetros y funciones)', () => {
-    expect(codes(program(letVar('x', 'int', int(1)), letVar('x', 'int', int(2))))).toEqual([
-      'DUPLICATE_DECLARATION',
-    ])
-    expect(codes(program(fn('f', [['a', 'int']], 'void', [letVar('a', 'int', int(1))])))).toEqual([
-      'DUPLICATE_DECLARATION',
-    ])
-    expect(codes(program(fn('f', [], 'void', []), fn('f', [], 'void', [])))).toEqual([
-      'DUPLICATE_DECLARATION',
-    ])
+describe('Semántico — arreglos', () => {
+  it('acepta literales, anidados, indexación y asignación indexada', () => {
+    expect(
+      codes(`
+        let a: int[] = [1, 2, 3];
+        let m: int[][] = [[1, 2], [3]];
+        a[0] = a[1] + m[1][0];
+        m[0] = [9, 9];
+        print(m[0][1]);
+      `),
+    ).toEqual([])
   })
 
-  it('una variable no puede usarse en su propio inicializador', () => {
-    expect(codes(program(letVar('x', 'int', bin('+', id('x'), int(1)))))).toEqual([
-      'UNDECLARED_IDENTIFIER',
-    ])
+  it('[] toma el tipo del contexto; sin contexto es un error', () => {
+    expect(codes('let a: int[] = []; let m: string[][] = [[], ["x"]];')).toEqual([])
+    expect(codes('let a = [];')).toEqual(['EMPTY_ARRAY_WITHOUT_TYPE'])
   })
 
-  it('constantes: reasignación y falta de inicializador', () => {
-    expect(codes(program(constVar('K', 'int', int(1)), assign('K', int(2))))).toEqual([
-      'CONST_REASSIGNMENT',
-    ])
-    expect(codes(program(constVar('K', 'int')))).toEqual(['CONST_WITHOUT_INITIALIZER'])
+  it('un arreglo declarado sin inicializador es válido (queda vacío)', () => {
+    expect(codes('let a: bool[]; print(a[0]);')).toEqual([])
   })
 
-  it('variable sin tipo ni inicializador, y variables void', () => {
-    expect(codes(program(letVar('x')))).toEqual(['MISSING_TYPE'])
-    expect(codes(program(letVar('x', 'void')))).toEqual(['INVALID_VOID_VARIABLE'])
+  it('exige elementos homogéneos (int y float se unifican en float)', () => {
+    expect(codes('let a = [1, "x"];')).toEqual(['HETEROGENEOUS_ARRAY'])
+    expect(check('let a = [1, 2.5];').symbolTable.lookup('a')).toMatchObject({
+      type: { kind: 'array', elementType: 'float' },
+    })
+    expect(codes('let a: int[] = [1, true];')).toEqual(['TYPE_MISMATCH'])
+    expect(codes('let a: float[] = [1, 2];')).toEqual([])
   })
 
-  it('asignaciones con tipo incompatible', () => {
-    expect(codes(program(letVar('x', 'int', int(1)), assign('x', str('hola'))))).toEqual(['TYPE_MISMATCH'])
-    expect(codes(program(letVar('s', 'string', bool(true))))).toEqual(['TYPE_MISMATCH'])
+  it('el índice debe ser int y solo se indexan arreglos', () => {
+    expect(codes('let a: int[] = [1]; print(a[1.5]);')).toEqual(['INVALID_INDEX_TYPE'])
+    expect(codes('let a: int[] = [1]; print(a["0"]);')).toEqual(['INVALID_INDEX_TYPE'])
+    expect(codes('let x: int = 1; print(x[0]);')).toEqual(['NOT_AN_ARRAY'])
   })
 
-  it('asignar a una función', () => {
-    expect(codes(program(fn('f', [], 'void', []), assign('f', int(1))))).toEqual(['INVALID_ASSIGNMENT'])
+  it('el valor almacenado debe ser compatible con el tipo del elemento', () => {
+    expect(codes('let a: int[] = [1]; a[0] = "x";')).toEqual(['TYPE_MISMATCH'])
+    expect(codes('let m: int[][] = [[1]]; m[0] = 5;')).toEqual(['TYPE_MISMATCH'])
   })
 
-  it('operaciones entre tipos incompatibles', () => {
-    expect(codes(program(print(bin('+', int(1), str('a')))))).toEqual(['INVALID_OPERAND_TYPES'])
-    expect(codes(program(print(bin('-', str('a'), str('b')))))).toEqual(['INVALID_OPERAND_TYPES'])
-    expect(codes(program(print(bin('%', float(1), int(2)))))).toEqual(['INVALID_OPERAND_TYPES'])
-    expect(codes(program(print(bin('&&', int(1), bool(true)))))).toEqual(['INVALID_OPERAND_TYPES'])
-    expect(codes(program(print(bin('<', str('a'), str('b')))))).toEqual(['INVALID_OPERAND_TYPES'])
-    expect(codes(program(print(bin('==', int(1), bool(true)))))).toEqual(['INVALID_OPERAND_TYPES'])
-    expect(codes(program(print(un('!', int(1)))))).toEqual(['INVALID_OPERAND_TYPES'])
-    expect(codes(program(print(un('-', str('a')))))).toEqual(['INVALID_OPERAND_TYPES'])
+  it('los arreglos no se convierten: int[] no es float[]', () => {
+    expect(codes('let a: int[] = [1]; let f: float[] = a;')).toEqual(['TYPE_MISMATCH'])
   })
 
-  it('no reporta errores en cascada a partir de una expresión inválida', () => {
-    // (1 + "a") * 2 → un solo error, no dos
-    expect(codes(program(print(bin('*', bin('+', int(1), str('a')), int(2)))))).toEqual([
-      'INVALID_OPERAND_TYPES',
-    ])
+  it('arreglos como parámetros y valores de retorno', () => {
+    expect(
+      codes(`
+        function primero(xs: int[]) -> int { return xs[0]; }
+        function crear() -> int[] { return [1, 2]; }
+        function vacio() -> string[] { return []; }
+        print(primero(crear()));
+      `),
+    ).toEqual([])
+    expect(codes('function f(xs: int[]) { } f([true]);')).toEqual(['TYPE_MISMATCH'])
   })
 
-  it('condiciones de if y while deben ser bool', () => {
-    expect(codes(program(ifS(int(1), [])))).toEqual(['INVALID_CONDITION'])
-    expect(codes(program(whileS(str('sí'), [])))).toEqual(['INVALID_CONDITION'])
+  it('print no acepta arreglos y los arreglos no se comparan', () => {
+    expect(codes('let a: int[] = [1]; print(a);')).toEqual(['INVALID_PRINT_ARGUMENT'])
+    expect(codes('let a: int[] = [1]; let b = a == a;')).toEqual(['INVALID_OPERAND_TYPES'])
   })
+})
 
-  it('llamadas a funciones inexistentes o a algo que no es función', () => {
-    expect(codes(program(exprS(call('noExiste'))))).toEqual(['UNDEFINED_FUNCTION'])
-    expect(codes(program(letVar('x', 'int', int(1)), exprS(call('x'))))).toEqual(['NOT_A_FUNCTION'])
-    expect(codes(program(fn('f', [], 'int', [ret(int(1))]), print(id('f'))))).toEqual(['FUNCTION_AS_VALUE'])
-  })
-
-  it('número y tipo de argumentos', () => {
-    const suma = fn('suma', [['a', 'int'], ['b', 'int']], 'int', [ret(bin('+', id('a'), id('b')))])
-    expect(codes(program(suma, print(call('suma', int(1)))))).toEqual(['ARGUMENT_COUNT_MISMATCH'])
-    expect(codes(program(suma, print(call('suma', int(1), str('2')))))).toEqual(['TYPE_MISMATCH'])
-  })
-
-  it('uso incorrecto de return', () => {
-    expect(codes(program(ret(int(1))))).toEqual(['RETURN_OUTSIDE_FUNCTION'])
-    expect(codes(program(fn('f', [], 'void', [ret(int(1))])))).toEqual(['RETURN_TYPE_MISMATCH'])
-    expect(codes(program(fn('f', [], 'int', [ret()])))).toEqual(['RETURN_TYPE_MISMATCH'])
-    expect(codes(program(fn('f', [], 'int', [ret(str('x'))])))).toEqual(['RETURN_TYPE_MISMATCH'])
-  })
-
-  it('funciones no-void que no retornan en todos los caminos', () => {
-    expect(codes(program(fn('f', [], 'int', [])))).toEqual(['MISSING_RETURN'])
-    expect(codes(program(fn('f', [['a', 'bool']], 'int', [ifS(id('a'), [ret(int(1))])])))).toEqual([
-      'MISSING_RETURN',
-    ])
-    expect(codes(program(fn('f', [], 'int', [whileS(bool(true), [ret(int(1))])])))).toEqual([
-      'MISSING_RETURN',
-    ])
-  })
-
-  it('usar el resultado de una función void como valor', () => {
-    const p = program(fn('v', [], 'void', []), letVar('x', 'int', call('v')))
-    expect(codes(p)).toEqual(['VOID_VALUE'])
-  })
-
-  it('funciones anidadas no están permitidas', () => {
-    expect(codes(program(fn('f', [], 'void', [fn('g', [], 'void', [])])))).toEqual(['NESTED_FUNCTION'])
-  })
-
-  it('conversiones explícitas no soportadas', () => {
-    expect(codes(program(print(cast('int', str('12')))))).toEqual(['INVALID_CAST'])
-    expect(codes(program(print(cast('int', bool(true)))))).toEqual(['INVALID_CAST'])
-  })
-
-  it('acumula varios errores con su ubicación', () => {
-    const p = program(
-      { kind: 'PrintStatement', argument: { kind: 'Identifier', name: 'a', loc: { line: 1, column: 7 } } },
-      { kind: 'ReturnStatement', loc: { line: 2, column: 1 } },
-    )
-    const { errors, ok } = analyze(p)
-    expect(ok).toBe(false)
-    expect(errors).toEqual([
-      expect.objectContaining({ code: 'UNDECLARED_IDENTIFIER', loc: { line: 1, column: 7 } }),
-      expect.objectContaining({ code: 'RETURN_OUTSIDE_FUNCTION', loc: { line: 2, column: 1 } }),
-    ])
+describe('Semántico — formato de diagnósticos', () => {
+  it('usa el contrato común CompilerDiagnostic con fase semantic y posición', () => {
+    const [error] = check('let a: int[] = [1];\nlet x: string = a[0];').errors
+    expect(error).toEqual({
+      phase: 'semantic',
+      code: 'TYPE_MISMATCH',
+      message: "No se puede inicializar 'x' de tipo string con un valor de tipo int",
+      position: { line: 2, column: 17 },
+    })
   })
 })

@@ -1,8 +1,14 @@
 # Informe de integración: frontend del compilador (Lexer, Tokens, Parser y AST)
 
 **Autor:** Jack-Limas
-**Rama:** `feature/lexer-parser` (creada desde `develop`)
+**Rama:** `feature/lexer-parser` → PR #1 hacia `develop`
 **Para:** DeividJulian (semántico, tabla de símbolos, scopes, tipos e IR) y JuanMaya8 (máquina virtual, Stack, Heap y ejecución)
+
+> **Actualización (Entrega A del plan `PROMPTS_COORDINACION.md`):**
+> el AST de `src/compiler/ast/nodes.ts` es el **contrato canónico** que
+> consumen directamente semántica e IR, y todos los errores usan el
+> contrato común **`CompilerDiagnostic`** de `src/compiler/errors.ts`.
+> Los cambios incompatibles están en la sección 12.
 
 ---
 
@@ -16,22 +22,22 @@ Código fuente → Lexer → Tokens → Parser → AST  ──▶  (semántico �
 ```
 
 - **Tokens:** catálogo de tipos de token, interfaz `Token` y tabla de palabras reservadas.
-- **Lexer:** analizador léxico carácter por carácter, con línea/columna y errores léxicos.
-- **AST:** nodos tipados como unión discriminada por `kind`, más un *printer* para depuración.
-- **Parser:** descenso recursivo con precedencia de operadores, errores sintácticos y recuperación (*panic mode*).
+- **Lexer:** analizador léxico carácter por carácter, con línea/columna y diagnósticos léxicos con código.
+- **AST canónico:** nodos tipados como unión discriminada por `kind`, lista `AST_NODE_KINDS` y un *printer* para depuración.
+- **Parser:** descenso recursivo con precedencia de operadores, diagnósticos sintácticos con código y recuperación (*panic mode*).
+- **Contrato común de errores:** `CompilerDiagnostic` para las cuatro fases.
 - **Punto de entrada único:** `parseSource(code)` en `src/compiler/frontend.ts`.
 - **Gramática documentada** (`docs/GRAMATICA.md`) y explicación del frontend (`docs/FRONTEND.md`).
-- **71 pruebas automatizadas** con Vitest y un script de demostración por consola.
+- **82 pruebas automatizadas** con Vitest y un script de demostración por consola.
 
 ## 2. Archivos creados o modificados
-
-### Creados
 
 ```
 src/compiler/
 ├── README.md                 Mapa de carpetas del compilador y responsables
 ├── tokens.ts                 Contrato de tokens (TokenType, Token, KEYWORDS)
-├── errors.ts                 Contrato de errores (CompilerError)
+├── errors.ts                 Contrato común de diagnósticos (CompilerDiagnostic)
+├── errors.test.ts            Pruebas del contrato de diagnósticos
 ├── frontend.ts               Punto de entrada: parseSource() y re-exportaciones
 ├── frontend.test.ts          Pruebas de integración
 ├── lexer/
@@ -39,15 +45,16 @@ src/compiler/
 │   ├── index.ts              tokenize()
 │   └── Lexer.test.ts
 ├── ast/
-│   ├── nodes.ts              Definición de todos los nodos
+│   ├── nodes.ts              AST canónico + AST_NODE_KINDS
 │   ├── printer.ts            printAst(), typeToString()
 │   ├── index.ts
-│   └── ast.test.ts
+│   ├── ast.test.ts
+│   └── contract.test.ts      Pruebas de contrato del AST
 └── parser/
     ├── Parser.ts             Parser de descenso recursivo
     ├── index.ts              parseTokens()
     └── Parser.test.ts
-scripts/frontend-demo.ts      Muestra tokens, AST y errores de un archivo .cf
+scripts/frontend-demo.ts      Muestra tokens, AST y diagnósticos de un archivo .cf
 examples/demo.cf              Programa válido de ejemplo
 examples/errores-lexicos.cf   Ejemplo con errores léxicos
 examples/errores-sintacticos.cf  Ejemplo con errores sintácticos
@@ -56,22 +63,22 @@ docs/FRONTEND.md              Explicación del Lexer, Parser y AST
 docs/INFORME_INTEGRACION_JACK.md  Este documento
 ```
 
-### Modificados (archivos compartidos, cambios mínimos)
+### Archivos compartidos modificados (cambios mínimos)
 
 | Archivo | Cambio | Motivo |
 | ------- | ------ | ------ |
-| `package.json` / `package-lock.json` | `vitest` como devDependency y scripts `test`, `test:watch`, `frontend:demo` | Ejecutar pruebas. Vitest es el runner nativo de Vite; ustedes también pueden usarlo. |
-| `tsconfig.node.json` | `"include"` ahora incluye `"scripts"` | Que el script de demo tenga verificación de tipos. |
+| `package.json` / `package-lock.json` | `vitest` como devDependency y scripts `test`, `test:watch`, `frontend:demo` | Ejecutar pruebas. |
+| `tsconfig.node.json` | `"include"` ahora incluye `"scripts"` | Verificar tipos del script de demo. |
 
-**No se modificó** `src/App.tsx`, `src/main.tsx`, `vite.config.ts`,
-`tsconfig.app.json` ni ninguna carpeta de los otros módulos.
+**No se modificaron** `src/App.tsx`, `src/main.tsx`, `vite.config.ts`,
+`tsconfig.app.json`, ni `semantic/`, `ir/`, `runtime/` o `integration/`.
 
 ## 3. Cómo funciona cada módulo (resumen)
 
 | Módulo | Entrada | Salida | Algoritmo |
 | ------ | ------- | ------ | --------- |
-| Lexer | `string` (código) | `Token[]` + errores léxicos | Recorrido lineal con *lookahead* de 1–2 caracteres; tabla hash de palabras reservadas. O(n). |
-| Parser | `Token[]` | `Program` (AST) + errores sintácticos | Descenso recursivo predictivo LL(1), un método por regla y por nivel de precedencia; *panic mode* para recuperarse de errores. |
+| Lexer | `string` (código) | `Token[]` + diagnósticos léxicos | Recorrido lineal con *lookahead* de 1–2 caracteres; tabla hash de palabras reservadas. O(n). |
+| Parser | `Token[]` | `Program` (AST) + diagnósticos sintácticos | Descenso recursivo predictivo LL(1), un método por regla y por nivel de precedencia; *panic mode*. |
 | AST | — | Estructura de datos | Unión discriminada por `kind`; cada nodo tiene `position`. |
 
 La explicación detallada está en `docs/FRONTEND.md`.
@@ -85,139 +92,113 @@ La explicación detallada está en `docs/FRONTEND.md`.
 - `if` / `else if` / `else`, `while`, `return` con o sin valor, `print(expr)`.
 - Bloques `{ ... }` anidados.
 - Operadores aritméticos `+ - * / %`, relacionales `== != < <= > >=`, lógicos `&& || !`, unario `-`.
-- Asignación `=` a variables y a elementos de arreglo (`a[i] = v`).
-- Literales de arreglo `[1, 2, 3]`, indexación `a[i]`, `m[i][j]`.
+- Asignación `=` a variables y a elementos de arreglo (`a[i] = v`, `m[i][j] = v`).
+- Literales de arreglo `[1, 2, 3]`, `[[1], [2]]`, indexación `a[i]`, `m[i][j]`.
 - Comentarios `//` y `/* */`.
-- Errores léxicos y sintácticos con línea, columna y mensaje en español.
+- Diagnósticos léxicos y sintácticos con fase, código estable, mensaje en español y posición.
 
 ## 5. Pruebas ejecutadas y resultados reales
 
-Comando: `npm test` (Vitest 5.1.0, Node 22.18.0, Windows 11).
+Comandos: `npm ci`, `npm test`, `npm run lint`, `npm run build` (Vitest 5.1.0, Node 22.18.0, Windows 11).
 
 ```
- Test Files  4 passed (4)
-      Tests  71 passed (71)
+ Test Files  6 passed (6)
+      Tests  82 passed (82)
 ```
 
 | Archivo | Pruebas | Resultado |
 | ------- | ------: | --------- |
-| `src/compiler/lexer/Lexer.test.ts` | 19 | ✅ todas pasan |
-| `src/compiler/parser/Parser.test.ts` | 44 | ✅ todas pasan |
-| `src/compiler/ast/ast.test.ts` | 3 | ✅ todas pasan |
-| `src/compiler/frontend.test.ts` | 5 | ✅ todas pasan |
+| `src/compiler/lexer/Lexer.test.ts` | 19 | ✅ |
+| `src/compiler/parser/Parser.test.ts` | 44 | ✅ |
+| `src/compiler/ast/ast.test.ts` | 3 | ✅ |
+| `src/compiler/ast/contract.test.ts` | 5 | ✅ |
+| `src/compiler/errors.test.ts` | 6 | ✅ |
+| `src/compiler/frontend.test.ts` | 5 | ✅ |
 
-Además se verificó:
-
-- `npm run build` (`tsc -b && vite build`): ✅ compila sin errores.
-- `npm run lint` (ESLint): ✅ sin errores ni advertencias.
+- `npm run build` (`tsc -b && vite build`): ✅ sin errores.
+- `npm run lint`: ✅ sin errores.
 - `npm run frontend:demo` con los tres archivos de `examples/`: ✅ salida esperada.
 
 ## 6. Comandos
 
 ```bash
-npm install                                    # dependencias
+npm ci                                         # dependencias exactas del lockfile
 npm test                                       # pruebas
-npm run test:watch                             # pruebas en modo observación
 npm run build                                  # verificación de tipos + build
 npm run lint                                   # ESLint
-npm run dev                                    # app React (plantilla actual)
-npm run frontend:demo -- examples/demo.cf      # ver tokens y AST (Node ≥ 22.18)
+npm run frontend:demo -- examples/demo.cf      # ver tokens, AST y diagnósticos (Node ≥ 22.18)
 ```
 
-## 7. Commits realizados (rama `feature/lexer-parser`)
+## 7. Commits
+
+Ver la pestaña *Commits* del PR #1 o `git log --oneline origin/develop..origin/feature/lexer-parser`.
+La entrega inicial tiene 15 commits; la Entrega A agrega:
 
 ```
-chore: organize compiler frontend structure
-feat: define compiler token types
-feat: implement lexical analyzer
-feat: add lexical error handling
-feat: define abstract syntax tree nodes
-feat: implement recursive descent parser
-feat: add expression precedence parsing
-feat: add compiler frontend entry point
-test: add lexer test cases
-test: add parser test cases
-test: add AST and frontend integration tests
-fix: skip whole blocks during parser error recovery
-chore: add frontend demo script and example programs
-docs: document compiler frontend grammar
-docs: add frontend integration report
+feat!: adopt the shared CompilerDiagnostic contract
+feat: mark the AST as the canonical compiler contract
+docs: update integration docs for the canonical contracts
 ```
 
 ## 8. Rama
 
-Todo el trabajo está en **`feature/lexer-parser`**, creada desde
-`origin/develop` (commit `f8404df`). **No se ha hecho push ni merge**:
-queda pendiente de revisión y autorización.
+`feature/lexer-parser`, creada desde `develop` (`f8404df`). Se integra a
+`develop` mediante el **PR #1**. No se hace push directo a `develop` ni merge
+automático.
 
 ## 9. Pendientes
 
-- **Push de la rama y Pull Request hacia `develop`** (esperando autorización).
-- **Integración en la UI** (`App.tsx`): no se tocó porque es compartida. Cuando
-  se defina quién la hace, basta con llamar a `parseSource(code)` y mostrar
-  `printAst(result.program)` y `result.errors`.
-- Posibles extensiones futuras, solo si el equipo las necesita: `for`,
-  `break`/`continue`, operadores compuestos (`+=`), `null`. Cualquier
-  extensión requiere acordarla antes, porque cambia el AST que ustedes consumen.
+- **Revisión y merge del PR #1** por el equipo (orden acordado: Jack → Deivid → Juan → UI).
+- **Entrega B (UI, rama `feature/ui`)**: se inicia cuando `runSource()` esté
+  integrado en `develop` (después de los PR de Deivid y Juan).
 
 ---
 
 ## 10. Guía de integración
 
-### 10.1 Invocar el frontend (recomendado)
+### 10.1 Invocar el frontend
 
 ```ts
-import { parseSource, formatError, printAst } from './compiler/frontend.ts';
+import { parseSource, formatDiagnostic } from './compiler/frontend.ts';
 
 const result = parseSource(sourceCode);
 
 if (!result.success) {
-  result.errors.forEach((e) => console.log(formatError(e)));
-  // → "[syntax] 3:14 Se esperaba ';' al final de la declaración de variable, pero se encontró 'print'."
+  result.errors.forEach((d) => console.log(formatDiagnostic(d)));
+  // → "[syntax] EXPECTED_TOKEN 1:15 Se esperaba ';' al final de la declaración de variable, pero se encontró 'print'."
   return;
 }
 
 const program = result.program!;        // Program, garantizado cuando success === true
-console.log(printAst(program));          // depuración
-semanticAnalyzer.analyze(program);       // ← Deivid
 ```
 
 ```ts
 interface FrontendResult {
-  success: boolean;            // true ⇔ errors.length === 0
-  tokens: Token[];             // siempre termina en EOF
-  program: Program | null;     // null solo si hubo errores léxicos
-  errors: CompilerError[];     // léxicos, o sintácticos si el lexer no falló
+  success: boolean;               // true ⇔ errors.length === 0
+  tokens: Token[];                // siempre termina en EOF
+  program: Program | null;        // null solo si hubo errores léxicos
+  errors: CompilerDiagnostic[];   // léxicos, o sintácticos si el lexer no falló
 }
 ```
 
-**Regla:** el análisis semántico solo debe ejecutarse cuando `success === true`.
+**Regla:** el análisis semántico solo se ejecuta cuando `success === true`.
 
-### 10.2 Invocar Lexer y Parser por separado
+Por separado: `tokenize(code)` → `{ tokens, errors }` y
+`parseTokens(tokens)` → `{ program, errors }`.
 
-```ts
-import { tokenize, parseTokens } from './compiler/frontend.ts';
-
-const { tokens, errors: lexicalErrors } = tokenize(code);   // = new Lexer(code).tokenize()
-const { program, errors: syntaxErrors } = parseTokens(tokens); // = new Parser(tokens).parse()
-```
-
-### 10.3 Contrato de tokens (`src/compiler/tokens.ts`)
+### 10.2 Contrato de tokens (`src/compiler/tokens.ts`)
 
 ```ts
 interface Token {
-  type: TokenType;                     // p. ej. 'IDENTIFIER'
-  lexeme: string;                      // texto exacto: '"hola"' (con comillas), '3.14'
-  literal: number | string | boolean | null; // valor convertido en literales; null en el resto
-  line: number;                        // desde 1
-  column: number;                      // desde 1
+  type: TokenType;                             // p. ej. 'IDENTIFIER'
+  lexeme: string;                              // texto exacto: '"hola"' (con comillas), '3.14'
+  literal: number | string | boolean | null;   // valor convertido en literales; null en el resto
+  line: number;                                // desde 1
+  column: number;                              // desde 1
 }
 ```
 
-`TokenType` es un objeto constante (no `enum`, porque el proyecto usa
-`erasableSyntaxOnly`). Se usa igual: `TokenType.LET`.
-
-| Grupo | Valores |
+| Grupo | Valores de `TokenType` |
 | ----- | ------- |
 | Palabras reservadas | `LET CONST FUNCTION RETURN IF ELSE WHILE PRINT TRUE FALSE` |
 | Tipos | `INT FLOAT STRING BOOL` |
@@ -229,36 +210,65 @@ interface Token {
 | Delimitadores | `LEFT_PAREN RIGHT_PAREN LEFT_BRACE RIGHT_BRACE LEFT_BRACKET RIGHT_BRACKET COMMA SEMICOLON COLON ARROW` |
 | Fin | `EOF` |
 
-### 10.4 Contrato de errores (`src/compiler/errors.ts`)
+### 10.3 Contrato común de diagnósticos (`src/compiler/errors.ts`)
 
 ```ts
 type CompilerPhase = 'lexical' | 'syntax' | 'semantic' | 'runtime';
 
-interface CompilerError {
+interface CompilerDiagnostic {
   phase: CompilerPhase;
-  message: string;     // en español
-  line: number;
-  column: number;
+  code: string;               // estable, UPPER_SNAKE_CASE (cada fase define los suyos)
+  message: string;            // en español
+  position?: SourcePosition;  // { line, column }; siempre presente en lexical/syntax
+  pc?: number;                // runtime: PC de la instrucción que falló
+  instruction?: string;       // runtime: opcode o texto de la instrucción
 }
 
-createError(phase, message, position): CompilerError
-formatError(error): string   // "[phase] line:column message"
+createDiagnostic(d: CompilerDiagnostic): CompilerDiagnostic  // copia y omite opcionales vacíos
+formatDiagnostic(d): string
+// "[runtime] HEAP_OUT_OF_BOUNDS 7:3 pc=12 (ARRAY_LOAD) Índice fuera de rango."
 ```
 
-> **Propuesta para el equipo:** incluí `'semantic'` y `'runtime'` en
-> `CompilerPhase` para que sus módulos puedan devolver errores con la
-> **misma forma** y la UI los muestre todos igual. Es opcional; si
-> prefieren otra estructura, la acordamos antes de cambiarla. Los errores
-> son objetos planos (no excepciones) para poder acumular varios.
+Los diagnósticos son objetos planos y serializables a JSON (no excepciones),
+así cada fase puede acumular varios y la UI los muestra en una sola lista.
 
-### 10.5 Contrato del AST (`src/compiler/ast/nodes.ts`)
+**Códigos del frontend** (`LexicalErrorCode`, `SyntaxErrorCode`):
 
-Todos los nodos tienen:
+| Fase | Código | Cuándo |
+| ---- | ------ | ------ |
+| lexical | `UNEXPECTED_CHARACTER` | Carácter no reconocido, `&` o `\|` sueltos |
+| lexical | `UNTERMINATED_STRING` | Cadena sin comilla de cierre en la misma línea |
+| lexical | `INVALID_ESCAPE` | Escape distinto de `\n \t \" \\` |
+| lexical | `UNTERMINATED_COMMENT` | `/*` sin `*/` |
+| lexical | `MALFORMED_NUMBER` | `12abc`, `3.` |
+| syntax | `EXPECTED_TOKEN` | Falta un token concreto (`;`, `)`, `{`, nombre...) |
+| syntax | `EXPECTED_EXPRESSION` | Falta una expresión (`let x = ;`) |
+| syntax | `EXPECTED_TYPE` | Tipo inválido (`let x: number`) |
+| syntax | `CONST_WITHOUT_INITIALIZER` | `const X: int;` |
+| syntax | `MISSING_TYPE_OR_INITIALIZER` | `let y;` |
+| syntax | `INVALID_ASSIGNMENT_TARGET` | `5 = x;`, `f() = 1;` |
+| syntax | `INVALID_CALLEE` | `(a + b)(1)` |
+| syntax | `NESTED_FUNCTION` | `function` dentro de un bloque |
+
+Ejemplos para las otras fases:
+
+```ts
+createDiagnostic({ phase: 'semantic', code: 'TYPE_MISMATCH', message: '...', position: node.position });
+createDiagnostic({ phase: 'runtime', code: 'DIVISION_BY_ZERO', message: '...', pc, instruction: 'DIV', position });
+```
+
+### 10.4 Contrato canónico del AST (`src/compiler/ast/nodes.ts`)
+
+Semántica e IR **importan estos tipos directamente**; no se mantiene un AST
+duplicado ni un adaptador. Todos los nodos tienen:
 
 ```ts
 kind: string;                                   // discriminante
 position: { line: number; column: number };     // token donde empieza la construcción
 ```
+
+`SourcePosition` se re-exporta desde `nodes.ts`. `AST_NODE_KINDS` es la
+lista en tiempo de ejecución de los 20 `kind`.
 
 #### Tipos
 
@@ -283,7 +293,7 @@ interface VariableDeclaration { kind: 'VariableDeclaration';
 interface FunctionDeclaration { kind: 'FunctionDeclaration';
                                 name: string;
                                 params: Parameter[];
-                                returnType: TypeAnnotation | null;      // null → no devuelve valor
+                                returnType: TypeAnnotation | null;      // null → void
                                 body: BlockStatement }
 interface Parameter           { kind: 'Parameter'; name: string; typeAnnotation: TypeAnnotation }
 
@@ -328,67 +338,70 @@ type Expression = AssignmentExpression | BinaryExpression | UnaryExpression | Li
                 | IdentifierExpression | CallExpression | ArrayExpression | IndexExpression;
 ```
 
-Tipos utilitarios exportados: `AstNode` (cualquier nodo), `AstNodeKind`,
-`AssignmentTarget`, `ArithmeticOperator`, `RelationalOperator`, `LogicalOperator`.
+Tipos utilitarios: `AstNode`, `AstNodeKind`, `AssignmentTarget`,
+`ArithmeticOperator`, `RelationalOperator`, `LogicalOperator`.
 
-### 10.6 Garantías que da el frontend
+**Correspondencia con el AST anterior de `semantic/ast-contract.ts`**
+(para retirar el adaptador):
+
+| Antes (semantic) | Canónico |
+| ---------------- | -------- |
+| `VarDeclaration` / `mutable` | `VariableDeclaration` / `mutability: 'let' \| 'const'` |
+| `Block` | `BlockStatement` |
+| `ReturnStatement.value` | `ReturnStatement.argument` |
+| `AssignmentStatement` | `ExpressionStatement` con `AssignmentExpression` |
+| `TypeName` (string escalar) | `TypeAnnotation` recursivo (`PrimitiveType` / `ArrayType`) |
+| retorno `'void'` | `returnType: null` |
+| `loc` | `position` |
+
+### 10.5 Garantías del frontend
 
 Cuando `success === true`, el AST cumple siempre:
 
 1. Las `const` tienen `initializer` (nunca `null`).
 2. Toda `VariableDeclaration` tiene `typeAnnotation` o `initializer` (al menos uno).
-3. `AssignmentExpression.target` es siempre `IdentifierExpression` o `IndexExpression`.
-4. `CallExpression.callee` es siempre un `IdentifierExpression`.
-5. `FunctionDeclaration` solo aparece en `Program.body` (nunca dentro de bloques).
-6. Los cuerpos de `if`, `else` y `while` siempre son `BlockStatement`.
+3. `AssignmentExpression.target` es `IdentifierExpression` o `IndexExpression`.
+4. `CallExpression.callee` es un `IdentifierExpression`.
+5. `FunctionDeclaration` solo aparece en `Program.body`.
+6. Los cuerpos de `if`, `else` y `while` son `BlockStatement`.
 7. La precedencia y asociatividad ya están resueltas en la forma del árbol.
-8. Un literal `int` siempre tiene `value` entero; `float` puede ser cualquier número.
-9. El AST es JSON serializable (solo objetos, arreglos, strings, números y booleanos).
+8. Un literal `int` siempre tiene `value` entero.
+9. El AST es JSON serializable.
 
-### 10.7 Qué le toca verificar al semántico (Deivid)
+Las pruebas `src/compiler/ast/contract.test.ts` vigilan este contrato.
 
-El parser **no** verifica (ver `docs/GRAMATICA.md`, sección 5):
+### 10.6 Qué verifica el semántico (Deivid)
 
-- Declaración previa de variables y funciones, y duplicados por scope.
-- Compatibilidad de tipos e inferencia cuando `typeAnnotation === null`.
-- Reasignación de `const`.
-- `return` fuera de función y tipo de retorno.
-- Número y tipos de argumentos.
-- Condiciones de `if` / `while` de tipo `bool`; índices de tipo `int`.
-- Uso de `let x: T;` antes de asignarle valor (si se quiere detectar).
-
-Sugerencia de recorrido:
+El parser **no** verifica (ver `docs/GRAMATICA.md` §5): declaración previa y
+duplicados, tipos e inferencia, reasignación de `const`, `return` fuera de
+función y su tipo, aridad y tipos de argumentos, condiciones `bool`, índices
+`int`, `[]` sin tipo contextual.
 
 ```ts
+import type { Statement } from '../ast/nodes.ts';
+import { createDiagnostic } from '../errors.ts';
+
 function checkStatement(node: Statement) {
   switch (node.kind) {
-    case 'VariableDeclaration': /* declarar en scope actual */ break;
-    case 'FunctionDeclaration': /* declarar función, nuevo scope para params y body */ break;
+    case 'VariableDeclaration': /* ... */ break;
     case 'BlockStatement':      /* abrir scope, recorrer node.body, cerrar scope */ break;
     // ...
   }
 }
+// createDiagnostic({ phase: 'semantic', code: 'UNDECLARED_IDENTIFIER', message: "...", position: node.position })
 ```
 
-Cada nodo tiene `position`, así que el error semántico puede crearse con:
-`createError('semantic', "La variable 'x' no está declarada.", node.position)`.
-
-### 10.8 Información para la VM (Juan)
-
-La VM no recibe el AST directamente sino el IR de Deivid, pero conviene saber:
+### 10.7 Información para la VM (Juan)
 
 - `print` recibe **una** expresión.
 - `int` y `float` llegan como `number` de JavaScript; la distinción está en
-  `literalType` (y en los tipos que calcule el semántico). Por ejemplo, la
-  división entera `7 / 2` requerirá tratamiento explícito si se quiere `3`.
-- Los arreglos son literales `[a, b, c]` con indexación `a[i]` y asignación
-  `a[i] = v`; son candidatos naturales a vivir en el **Heap**.
-- Las funciones son de nivel superior y se llaman por nombre (sin *closures*),
-  lo que simplifica los marcos de pila (**Stack frames**).
-- `CompilerError` con `phase: 'runtime'` está disponible para errores de ejecución
-  (índice fuera de rango, división por cero...).
+  `literalType` y en los tipos del semántico.
+- Arreglos: literales, indexación anidada y asignación indexada, candidatos al Heap.
+- Funciones solo de nivel superior, llamadas por nombre (sin *closures*).
+- Errores de ejecución: `CompilerDiagnostic` con `phase: 'runtime'`, `code`, `pc`,
+  `instruction` y `position` si el IR conserva la ubicación de origen.
 
-### 10.9 Ejemplo de entrada y salida
+### 10.8 Ejemplos de entrada y salida
 
 Entrada:
 
@@ -397,7 +410,7 @@ let age: int = 21;
 print(age + 1);
 ```
 
-`result.program` (JSON, posiciones omitidas en los nodos internos por brevedad):
+`result.program` (posiciones de nodos internos omitidas por brevedad):
 
 ```json
 {
@@ -437,21 +450,33 @@ print(x);
 {
   "success": false,
   "errors": [
-    { "phase": "syntax", "message": "Se esperaba ';' al final de la declaración de variable, pero se encontró 'print'.", "line": 1, "column": 15 }
+    {
+      "phase": "syntax",
+      "code": "EXPECTED_TOKEN",
+      "message": "Se esperaba ';' al final de la declaración de variable, pero se encontró 'print'.",
+      "position": { "line": 1, "column": 15 }
+    }
   ]
 }
 ```
-
-Más ejemplos ejecutables: `npm run frontend:demo -- examples/<archivo>.cf`.
 
 ## 11. Qué reciben de mi trabajo
 
 | Integrante | Recibe | Archivos clave |
 | ---------- | ------ | -------------- |
-| **DeividJulian** | `parseSource()` y el AST tipado (`Program`) como entrada del semántico; `CompilerError`/`createError` para reportar errores semánticos; `typeToString()` para mensajes de tipos (`int[]`). | `frontend.ts`, `ast/nodes.ts`, `errors.ts`, `docs/GRAMATICA.md` §5 |
-| **JuanMaya8** | El contrato de errores (`phase: 'runtime'`) y la descripción del lenguaje (qué construcciones existen y cómo se comportan) para diseñar la VM. | `errors.ts`, `docs/GRAMATICA.md`, sección 10.8 de este informe |
-| **Todos (UI)** | `parseSource()`, `printAst()` y `formatError()` para mostrar tokens, AST y errores en la aplicación React. | `frontend.ts` |
+| **DeividJulian** | El AST canónico para importar directamente en semántica e IR; `createDiagnostic` para errores semánticos; `typeToString()` para mensajes de tipos (`int[]`). | `ast/nodes.ts`, `errors.ts`, `frontend.ts`, `docs/GRAMATICA.md` §5 |
+| **JuanMaya8** | `parseSource()` para `runSource()`; `CompilerDiagnostic` para errores runtime con `pc`/`instruction`. | `frontend.ts`, `errors.ts` |
+| **UI** | `runSource()` (de Juan) devolverá tokens, AST y `CompilerDiagnostic[]`; `printAst()` y `formatDiagnostic()` para mostrarlos. | `frontend.ts`, `errors.ts` |
 
-**Regla de colaboración:** si alguien necesita un cambio en los nodos del
-AST o en los tokens, lo acordamos primero, porque cualquier cambio afecta
-al parser y al semántico al mismo tiempo.
+## 12. Cambios incompatibles de la Entrega A
+
+| Antes | Ahora | Qué deben cambiar |
+| ----- | ----- | ----------------- |
+| `CompilerError` | `CompilerDiagnostic` | Renombrar el import (p. ej. `run-source.ts`). |
+| `error.line`, `error.column` | `diagnostic.position?.line`, `.column` | Quien lea la posición de errores del frontend. |
+| `createError(phase, message, position)` | `createDiagnostic({ phase, code, message, position })` | Agregar `code`. |
+| `formatError(e)` | `formatDiagnostic(d)` | Renombrar. |
+| — | `code` obligatorio | Cada fase define sus códigos estables. |
+
+El AST **no cambió** de forma: solo se documentó como canónico y se
+agregaron `AST_NODE_KINDS` y la re-exportación de `SourcePosition`.

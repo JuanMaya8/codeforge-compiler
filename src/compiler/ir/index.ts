@@ -1,19 +1,20 @@
-import type { Program } from '../semantic/ast-contract'
-import type { SemanticError } from '../semantic/semantic-errors'
-import { analyze, type SemanticResult } from '../semantic/type-checker'
-import type { IRProgram } from './instructions'
-import { generateIR } from './ir-generator'
+import type { Program } from '../ast/nodes.ts'
+import type { SemanticDiagnostic } from '../semantic/semantic-errors.ts'
+import { analyze, type SemanticResult } from '../semantic/type-checker.ts'
+import type { IRProgram } from './instructions.ts'
+import { generateIR } from './ir-generator.ts'
 
-export * from './instructions'
-export * from './ir-generator'
-export * from './ir-printer'
+export * from './instructions.ts'
+export * from './ir-generator.ts'
+export * from './ir-printer.ts'
 
 export type CompileToIRResult =
   | { ok: true; ir: IRProgram; semantic: SemanticResult }
-  | { ok: false; errors: SemanticError[]; semantic: SemanticResult }
+  | { ok: false; errors: SemanticDiagnostic[]; semantic: SemanticResult }
 
 /**
  * Punto de entrada de esta etapa: AST → análisis semántico → IR.
+ * Recibe el `program` de `parseSource()` cuando `success === true`.
  * Si hay errores semánticos no se genera IR.
  */
 export function compileToIR(program: Program): CompileToIRResult {

@@ -1,15 +1,16 @@
-import { createError, type CompilerError } from '../errors.ts';
+import { createDiagnostic, LexicalErrorCode, type CompilerDiagnostic } from '../errors.ts';
 import {
   TokenType,
   lookupKeyword,
   type LiteralValue,
+  type SourcePosition,
   type Token,
 } from '../tokens.ts';
 
 export interface LexerResult {
   /** Recognized tokens. The last one is always EOF. */
   tokens: Token[];
-  errors: CompilerError[];
+  errors: CompilerDiagnostic[];
 }
 
 /** Operators and delimiters made of a single character. */
@@ -52,7 +53,7 @@ const ESCAPE_SEQUENCES: Readonly<Record<string, string>> = {
 export class Lexer {
   private readonly source: string;
   private readonly tokens: Token[] = [];
-  private readonly errors: CompilerError[] = [];
+  private readonly errors: CompilerDiagnostic[] = [];
 
   private start = 0;
   private current = 0;
@@ -121,11 +122,11 @@ export class Lexer {
         return;
       case '&':
         if (this.match('&')) this.addToken(TokenType.AND);
-        else this.error("Carácter '&' inesperado. ¿Quisiste escribir '&&'?");
+        else this.error(LexicalErrorCode.UNEXPECTED_CHARACTER, "Carácter '&' inesperado. ¿Quisiste escribir '&&'?");
         return;
       case '|':
         if (this.match('|')) this.addToken(TokenType.OR);
-        else this.error("Carácter '|' inesperado. ¿Quisiste escribir '||'?");
+        else this.error(LexicalErrorCode.UNEXPECTED_CHARACTER, "Carácter '|' inesperado. ¿Quisiste escribir '||'?");
         return;
 
       // Division or comment.
@@ -145,7 +146,7 @@ export class Lexer {
     } else if (isIdentifierStart(char)) {
       this.scanIdentifier();
     } else {
-      this.error(`Carácter '${char}' no reconocido.`);
+      this.error(LexicalErrorCode.UNEXPECTED_CHARACTER, `Carácter '${char}' no reconocido.`);
     }
   }
 
@@ -162,6 +163,7 @@ export class Lexer {
       this.advance(); // consume '.'
       if (!isDigit(this.peek())) {
         this.error(
+          LexicalErrorCode.MALFORMED_NUMBER,
           `Número decimal mal formado '${this.currentLexeme()}': se esperaba un dígito después del punto.`,
         );
         return;
@@ -174,6 +176,7 @@ export class Lexer {
     if (isIdentifierStart(this.peek())) {
       while (isIdentifierPart(this.peek())) this.advance();
       this.error(
+        LexicalErrorCode.MALFORMED_NUMBER,
         `Número mal formado '${this.currentLexeme()}': un identificador no puede empezar con un dígito.`,
       );
       return;
@@ -205,7 +208,7 @@ export class Lexer {
     while (this.peek() !== '"') {
       // Strings must be closed on the same line.
       if (this.isAtEnd() || this.peek() === '\n') {
-        this.error('Cadena de texto sin cerrar: falta la comilla doble final.');
+        this.error(LexicalErrorCode.UNTERMINATED_STRING, 'Cadena de texto sin cerrar: falta la comilla doble final.');
         return;
       }
 
@@ -237,12 +240,10 @@ export class Lexer {
       return ESCAPE_SEQUENCES[char];
     }
 
-    this.errors.push(
-      createError(
-        'lexical',
-        `Secuencia de escape '\\${char === '\0' ? '' : char}' no válida. Usa \\n, \\t, \\" o \\\\.`,
-        escapePosition,
-      ),
+    this.errorAt(
+      LexicalErrorCode.INVALID_ESCAPE,
+      `Secuencia de escape '\\${char === '\0' ? '' : char}' no válida. Usa \\n, \\t, \\" o \\\\.`,
+      escapePosition,
     );
     this.skipRestOfString();
     return null;
@@ -270,7 +271,7 @@ export class Lexer {
       }
       this.advance();
     }
-    this.error("Comentario de bloque sin cerrar: falta '*/'.");
+    this.error(LexicalErrorCode.UNTERMINATED_COMMENT, "Comentario de bloque sin cerrar: falta '*/'.");
   }
 
   // ---------------------------------------------------------------------
@@ -326,13 +327,12 @@ export class Lexer {
   }
 
   /** Records a lexical error at the start of the current lexeme. */
-  private error(message: string): void {
-    this.errors.push(
-      createError('lexical', message, {
-        line: this.startLine,
-        column: this.startColumn,
-      }),
-    );
+  private error(code: LexicalErrorCode, message: string): void {
+    this.errorAt(code, message, { line: this.startLine, column: this.startColumn });
+  }
+
+  private errorAt(code: LexicalErrorCode, message: string, position: SourcePosition): void {
+    this.errors.push(createDiagnostic({ phase: 'lexical', code, message, position }));
   }
 }
 

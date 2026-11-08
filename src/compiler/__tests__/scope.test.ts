@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { SymbolTable } from '../semantic/symbol-table'
+import { SymbolTable } from '../semantic/symbol-table.ts'
+import { arrayOf } from '../semantic/types.ts'
 
 describe('Scope y SymbolTable', () => {
   it('declara y encuentra una variable en el scope global', () => {
@@ -71,5 +72,14 @@ describe('Scope y SymbolTable', () => {
     const table = new SymbolTable()
     table.declareVariable('x', 'variable', 'int')
     expect(table.dump()).toContain('variable x: int [global x]')
+  })
+
+  it('guarda tipos arreglo recursivos y los muestra en el dump', () => {
+    const table = new SymbolTable()
+    const m = table.declareVariable('m', 'variable', arrayOf(arrayOf('float')))
+    expect(m.ok && m.symbol.type).toEqual({ kind: 'array', elementType: { kind: 'array', elementType: 'float' } })
+    table.declareFunction('suma', [{ name: 'xs', type: arrayOf('int') }], 'int')
+    expect(table.dump()).toContain('variable m: float[][] [global m]')
+    expect(table.dump()).toContain('function suma(xs: int[]): int')
   })
 })
