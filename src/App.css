@@ -169,6 +169,53 @@
   color: var(--text-muted);
 }
 
+/* ---- Editor panel ----------------------------------------------------- */
+
+.editor-panel__header {
+  flex-wrap: wrap;
+}
+
+.editor-panel__file {
+  font-family: var(--font-mono);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.82rem;
+  color: var(--accent-light);
+}
+
+.editor-panel__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.editor-panel__message {
+  margin: 0;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+  animation: fade-in 200ms ease both;
+}
+
+.editor-panel__message--info {
+  color: var(--accent-light);
+  background: var(--accent-soft);
+}
+.editor-panel__message--success {
+  color: var(--success);
+  background: var(--success-soft);
+}
+.editor-panel__message--warning {
+  color: var(--warning);
+  background: rgba(251, 191, 36, 0.1);
+}
+.editor-panel__message--error {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
 /* ---- Responsive ------------------------------------------------------- */
 
 @media (max-width: 1024px) {
