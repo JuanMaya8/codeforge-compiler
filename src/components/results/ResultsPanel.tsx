@@ -7,6 +7,7 @@ import { AstView } from './AstView';
 import { ConsoleView } from './ConsoleView';
 import { EmptyState } from './EmptyState';
 import { IrView } from './IrView';
+import { MemoryView } from './MemoryView';
 import { TokensView } from './TokensView';
 import './results.css';
 
@@ -84,6 +85,12 @@ const TABS: TabDefinition[] = [
     label: 'Consola',
     count: (run) => run.result.execution?.output.length ?? null,
     render: (run, props) => <ConsoleView run={run} onShowDiagnostics={() => props.onTabChange('diagnostics')} />,
+  },
+  {
+    id: 'memory',
+    label: 'Memoria',
+    count: () => null,
+    render: (run) => <MemoryView execution={run.result.execution} ir={run.result.ir} stage={run.result.stage} />,
   },
 ];
 
