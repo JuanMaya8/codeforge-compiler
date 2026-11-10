@@ -2,6 +2,7 @@ import { useRef, type KeyboardEvent, type ReactNode } from 'react';
 import type { RunState } from '../../hooks/useCompiler';
 import type { ResultTab } from '../../lib/runSummary';
 import type { CompilationRun } from '../../services/compilerService';
+import { DiagnosticsView } from '../diagnostics/DiagnosticsView';
 import { AstView } from './AstView';
 import { ConsoleView } from './ConsoleView';
 import { EmptyState } from './EmptyState';
@@ -30,6 +31,7 @@ interface TabDefinition {
   label: string;
   /** Number shown next to the label, when it makes sense. */
   count: (run: CompilationRun) => number | null;
+  countTone?: (run: CompilationRun) => 'neutral' | 'error';
   render: (run: CompilationRun, props: ResultsPanelProps) => ReactNode;
 }
 
@@ -66,6 +68,15 @@ const TABS: TabDefinition[] = [
         execution={run.result.execution}
         onLocate={props.onLocate}
       />
+    ),
+  },
+  {
+    id: 'diagnostics',
+    label: 'Diagnósticos',
+    count: (run) => run.result.diagnostics.length,
+    countTone: (run) => (run.result.diagnostics.length > 0 ? 'error' : 'neutral'),
+    render: (run, props) => (
+      <DiagnosticsView diagnostics={run.result.diagnostics} stage={run.result.stage} onLocate={props.onLocate} />
     ),
   },
   {
@@ -117,7 +128,11 @@ export function ResultsPanel(props: ResultsPanelProps) {
                 onClick={() => onTabChange(tab.id)}
               >
                 {tab.label}
-                {count !== null && <span className="tabs__count">{count}</span>}
+                {count !== null && (
+                  <span className={`tabs__count ${run && tab.countTone?.(run) === 'error' ? 'tabs__count--error' : ''}`}>
+                    {count}
+                  </span>
+                )}
               </button>
             );
           })}
