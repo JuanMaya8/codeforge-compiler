@@ -2,8 +2,10 @@ import { useRef, type KeyboardEvent, type ReactNode } from 'react';
 import type { RunState } from '../../hooks/useCompiler';
 import type { ResultTab } from '../../lib/runSummary';
 import type { CompilationRun } from '../../services/compilerService';
+import { AstView } from './AstView';
 import { ConsoleView } from './ConsoleView';
 import { EmptyState } from './EmptyState';
+import { TokensView } from './TokensView';
 import './results.css';
 
 /** A source location the user asked to see in the editor. */
@@ -31,6 +33,24 @@ interface TabDefinition {
 }
 
 const TABS: TabDefinition[] = [
+  {
+    id: 'tokens',
+    label: 'Tokens',
+    count: (run) => run.result.tokens.length,
+    render: (run, props) => (
+      <TokensView
+        tokens={run.result.tokens}
+        hasLexicalErrors={run.result.stage === 'lexical'}
+        onLocate={props.onLocate}
+      />
+    ),
+  },
+  {
+    id: 'ast',
+    label: 'AST',
+    count: () => null,
+    render: (run, props) => <AstView ast={run.result.ast} stage={run.result.stage} onLocate={props.onLocate} />,
+  },
   {
     id: 'console',
     label: 'Consola',
