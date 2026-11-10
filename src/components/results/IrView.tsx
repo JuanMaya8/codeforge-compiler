@@ -93,10 +93,23 @@ export function IrView({ ir, stage, execution, onLocate }: IrViewProps) {
       )}
 
       {execution && (
-        <p className={`callout ${execution.status === 'failed' ? 'callout--runtime' : 'callout--info'}`}>
-          {execution.status === 'failed'
-            ? `La VM se detuvo en PC ${execution.pc} de ${execution.functionName}; la instrucción está resaltada.`
-            : `La ejecución terminó en PC ${execution.pc} de ${execution.functionName} (última instrucción ejecutada, marcada).`}
+        <p className={`callout callout--with-action ${execution.status === 'failed' ? 'callout--runtime' : 'callout--info'}`}>
+          <span>
+            {execution.status === 'failed'
+              ? `La VM se detuvo en PC ${execution.pc} de ${execution.functionName}; la instrucción está resaltada.`
+              : `La ejecución terminó en PC ${execution.pc} de ${execution.functionName} (última instrucción ejecutada, marcada).`}
+          </span>
+          {mode === 'structured' && (
+            <button
+              type="button"
+              className="btn btn--small"
+              onClick={() =>
+                document.querySelector('.ir-table__current')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              }
+            >
+              Ir a la instrucción
+            </button>
+          )}
         </p>
       )}
 

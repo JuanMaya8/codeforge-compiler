@@ -230,9 +230,15 @@
 
 @media (max-width: 760px) {
   .topbar {
+    position: static;
     flex-wrap: wrap;
     gap: 10px;
     padding: 10px 14px;
+  }
+
+  .topbar .logo-mark {
+    width: 30px;
+    height: 30px;
   }
 
   .topbar__status {

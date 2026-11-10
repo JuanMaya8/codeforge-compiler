@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import type { RunState } from '../../hooks/useCompiler';
 import type { ResultTab } from '../../lib/runSummary';
 import type { CompilationRun } from '../../services/compilerService';
@@ -97,9 +97,23 @@ const TABS: TabDefinition[] = [
 export function ResultsPanel(props: ResultsPanelProps) {
   const { state, activeTab, onTabChange } = props;
   const tabRefs = useRef<Partial<Record<ResultTab, HTMLButtonElement | null>>>({});
+  const tabListRef = useRef<HTMLDivElement>(null);
   const run = state.status === 'finished' ? state.run : null;
   const stale = run !== null && run.source !== props.currentSource;
   const current = TABS.find((tab) => tab.id === activeTab) ?? TABS[0];
+
+  // On narrow screens the tab list scrolls horizontally: keep the active tab visible
+  // (only horizontally, so the page itself never jumps).
+  useEffect(() => {
+    const list = tabListRef.current;
+    const tab = tabRefs.current[current.id];
+    if (!list || !tab) return;
+    const listBox = list.getBoundingClientRect();
+    const tabBox = tab.getBoundingClientRect();
+    if (tabBox.left < listBox.left || tabBox.right > listBox.right) {
+      list.scrollLeft += tabBox.left - listBox.left - 12;
+    }
+  }, [current.id, state.status]);
 
   // Arrow keys move between tabs (WAI-ARIA tabs pattern).
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -115,7 +129,13 @@ export function ResultsPanel(props: ResultsPanelProps) {
   return (
     <section className="panel results-panel" aria-label="Resultados del compilador">
       <div className="results-panel__header">
-        <div className="tabs" role="tablist" aria-label="Vistas del resultado" onKeyDown={handleKeyDown}>
+        <div
+          className="tabs"
+          role="tablist"
+          aria-label="Vistas del resultado"
+          onKeyDown={handleKeyDown}
+          ref={tabListRef}
+        >
           {TABS.map((tab) => {
             const selected = tab.id === current.id;
             const count = run ? tab.count(run) : null;

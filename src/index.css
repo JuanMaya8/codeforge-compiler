@@ -54,6 +54,7 @@
   --transition: 160ms ease;
 
   font-family: var(--font-ui);
+  font-variant-ligatures: none;
   font-size: 15px;
   line-height: 1.5;
   color: var(--text);
@@ -103,8 +104,14 @@ button:disabled {
 
 code,
 pre,
-kbd {
+kbd,
+textarea {
   font-family: var(--font-mono);
+  /* Show code exactly as typed: no ligatures turning ">=" into "≥" or "->" into an arrow. */
+  font-variant-ligatures: none;
+  font-feature-settings:
+    'liga' 0,
+    'calt' 0;
 }
 
 kbd {
