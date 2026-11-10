@@ -33,9 +33,11 @@ Para ejecutar la interfaz de desarrollo de Vite:
 npm run dev
 ```
 
-La pantalla React todavía es la plantilla inicial de Vite; las fases del
-compilador se pueden probar desde los servicios y demos de consola descritos
-abajo.
+La interfaz web permite escribir un programa, compilarlo y ejecutarlo, y ver
+tokens, AST, IR, diagnósticos, salida y memoria de la VM (Stack, Heap y
+globales). Incluye ejemplos listos para probar; ver
+[docs/INTERFAZ_WEB.md](docs/INTERFAZ_WEB.md). Las fases también se pueden probar
+desde los servicios y demos de consola descritos abajo.
 
 ## Demos de consola
 
@@ -79,9 +81,7 @@ Todos los errores usan `CompilerDiagnostic` (`src/compiler/errors.ts`).
 | `src/compiler/runtime` | Máquina virtual, Stack, Heap, errores y pruebas |
 | `src/compiler/run-source.ts` | Servicio fuente-a-ejecución independiente de React |
 | `examples/` | Programas de demostración |
-
-La interfaz React todavía no está conectada a `runSource`; esa es la entrega B
-de Jack (`feature/ui`).
+| `src/App.tsx`, `src/components`, `src/services` | Interfaz React conectada solo a `runSource()` |
 
 ## Documentación
 
@@ -91,5 +91,6 @@ de Jack (`feature/ui`).
 - [Plan por responsable](docs/PROMPTS_COORDINACION.md)
 - [Contrato IR v2.0](src/compiler/ir/README.md)
 - [Runtime y API de ejecución](src/compiler/runtime/README.md)
+- [Interfaz web](docs/INTERFAZ_WEB.md)
 - [Prompt de continuidad del trabajo](CONTEXTO_CONTINUACION.md)
 - [Revisión histórica de contratos (v1.0)](docs/REVISION_CONTRATOS_INTEGRACION.md)

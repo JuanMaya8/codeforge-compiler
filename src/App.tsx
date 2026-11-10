@@ -1,122 +1,135 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useMemo, useState } from 'react';
+import type { CompilerPhase } from './compiler';
+import type { LocateRequest } from './components/editor/CodeEditor';
+import { EditorPanel, type EditorMessage } from './components/editor/EditorPanel';
+import { ExampleList } from './components/examples/ExampleSelector';
+import { TopBar } from './components/layout/TopBar';
+import { ResultsPanel, type LocateTarget } from './components/results/ResultsPanel';
+import { DEFAULT_EXAMPLE, type ExampleProgram } from './examples/programs';
+import { useCompiler } from './hooks/useCompiler';
+import {
+  compilerStatus,
+  defaultTabFor,
+  describeOutcome,
+  diagnosticLineMarkers,
+  executionStatus,
+  type ResultTab,
+} from './lib/runSummary';
+import { readStored, writeStored } from './lib/storage';
+import type { CompilationRun } from './services/compilerService';
+import './App.css';
 
-function App() {
-  const [count, setCount] = useState(0)
+const SOURCE_KEY = 'codeforge.source';
+const EXAMPLE_KEY = 'codeforge.example';
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+/** Message shown above the editor after a run. */
+function messageFor(run: CompilationRun): EditorMessage {
+  const outcome = describeOutcome(run.result);
+  const tone = outcome.kind.startsWith('completed') ? 'success' : 'error';
+  return { tone, text: `${outcome.title}: ${outcome.detail}.` };
 }
 
-export default App
+function App() {
+  const [source, setSource] = useState(() => readStored(SOURCE_KEY) ?? DEFAULT_EXAMPLE.source);
+  const [activeExampleId, setActiveExampleId] = useState<string | null>(() =>
+    readStored(SOURCE_KEY) === null ? DEFAULT_EXAMPLE.id : readStored(EXAMPLE_KEY),
+  );
+  const [message, setMessage] = useState<EditorMessage | null>(null);
+  const [activeTab, setActiveTab] = useState<ResultTab>('console');
+  const [locate, setLocate] = useState<LocateRequest | null>(null);
+
+  const { state, run, running } = useCompiler({
+    onFinished: (finished) => {
+      setActiveTab(defaultTabFor(finished.result));
+      setMessage(messageFor(finished));
+    },
+  });
+
+  const finishedRun = state.status === 'finished' ? state.run : null;
+  const resultsAreCurrent = finishedRun !== null && finishedRun.source === source;
+  const markers = useMemo(
+    () =>
+      resultsAreCurrent && finishedRun
+        ? diagnosticLineMarkers(finishedRun.result.diagnostics)
+        : new Map<number, CompilerPhase>(),
+    [finishedRun, resultsAreCurrent],
+  );
+
+  const updateSource = (next: string) => {
+    setSource(next);
+    writeStored(SOURCE_KEY, next);
+  };
+
+  const runProgram = () => {
+    if (running) return;
+    if (source.trim() === '') {
+      setMessage({ tone: 'warning', text: 'El editor está vacío: escribe un programa o carga un ejemplo.' });
+      return;
+    }
+    setMessage({ tone: 'info', text: 'Compilando y ejecutando…' });
+    run(source);
+  };
+
+  const selectExample = (example: ExampleProgram) => {
+    updateSource(example.source);
+    setActiveExampleId(example.id);
+    writeStored(EXAMPLE_KEY, example.id);
+    setMessage({ tone: 'info', text: `Ejemplo cargado: ${example.title}. Pulsa Ejecutar para compilarlo.` });
+  };
+
+  const clearEditor = () => {
+    updateSource('');
+    setActiveExampleId(null);
+    writeStored(EXAMPLE_KEY, '');
+    setMessage({ tone: 'info', text: 'Editor limpio. Escribe un programa CodeForge.' });
+  };
+
+  const locateInEditor = (target: LocateTarget) => {
+    setLocate({ ...target, nonce: Date.now() });
+  };
+
+  return (
+    <div className="app">
+      <TopBar
+        compilerStatus={compilerStatus(state)}
+        executionStatus={executionStatus(state)}
+        running={running}
+        onRun={runProgram}
+      />
+
+      <main className="layout">
+        <aside className="sidebar panel" aria-label="Ejemplos">
+          <div className="panel__header">
+            <h2 className="panel__title">Ejemplos</h2>
+          </div>
+          <ExampleList activeId={activeExampleId} onSelect={selectExample} />
+        </aside>
+
+        <div className="workspace">
+          <EditorPanel
+            source={source}
+            onSourceChange={updateSource}
+            activeExampleId={activeExampleId}
+            onSelectExample={selectExample}
+            onClear={clearEditor}
+            onRun={runProgram}
+            running={running}
+            message={message}
+            markers={markers}
+            locate={locate}
+          />
+
+          <ResultsPanel
+            state={state}
+            currentSource={source}
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            onLocate={locateInEditor}
+          />
+        </div>
+      </main>
+    </div>
+  );
+}
+
+export default App;
