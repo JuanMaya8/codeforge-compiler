@@ -5,6 +5,7 @@ import type { CompilationRun } from '../../services/compilerService';
 import { AstView } from './AstView';
 import { ConsoleView } from './ConsoleView';
 import { EmptyState } from './EmptyState';
+import { IrView } from './IrView';
 import { TokensView } from './TokensView';
 import './results.css';
 
@@ -50,6 +51,22 @@ const TABS: TabDefinition[] = [
     label: 'AST',
     count: () => null,
     render: (run, props) => <AstView ast={run.result.ast} stage={run.result.stage} onLocate={props.onLocate} />,
+  },
+  {
+    id: 'ir',
+    label: 'IR',
+    count: (run) =>
+      run.result.ir
+        ? run.result.ir.main.length + run.result.ir.functions.reduce((sum, fn) => sum + fn.body.length, 0)
+        : null,
+    render: (run, props) => (
+      <IrView
+        ir={run.result.ir}
+        stage={run.result.stage}
+        execution={run.result.execution}
+        onLocate={props.onLocate}
+      />
+    ),
   },
   {
     id: 'console',

@@ -660,3 +660,130 @@
     flex: 1 1 100%;
   }
 }
+
+/* ---- IR ---------------------------------------------------------------- */
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.chip-list__label {
+  margin-right: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.78rem;
+}
+
+.chip__type {
+  color: var(--code-type);
+}
+
+.ir-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ir-body__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.ir-body__title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  color: var(--accent-light);
+}
+
+.ir-body__subtitle {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.ir-table td:first-child,
+.ir-table th:first-child {
+  width: 56px;
+  text-align: right;
+}
+
+.ir-table__label td {
+  background: rgba(139, 92, 246, 0.05);
+}
+
+.ir-table__label .data-table__code {
+  color: var(--accent-light);
+}
+
+.ir-table__current td {
+  background: rgba(96, 165, 250, 0.12);
+}
+
+.ir-table__current td:first-child {
+  box-shadow: inset 3px 0 0 var(--info);
+}
+
+.ir-table__failed td {
+  background: var(--danger-soft);
+}
+
+.ir-table__failed td:first-child {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.opcode {
+  display: inline-block;
+  min-width: 64px;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.opcode--data {
+  color: var(--code-symbol);
+}
+.opcode--flow {
+  color: var(--code-keyword);
+}
+.opcode--call {
+  color: var(--code-type);
+}
+.opcode--memory {
+  color: var(--code-literal);
+}
+.opcode--io {
+  color: var(--code-string);
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-light);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--transition);
+}
+
+.link-button:hover {
+  text-decoration-color: currentColor;
+}
